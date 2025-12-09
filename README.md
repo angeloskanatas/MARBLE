@@ -84,7 +84,15 @@ Marble is a modular, configuration-driven suite for training, evaluating, and pe
 
 6. **Inference**: We provide scripts for inference on pretrained models. See the [Inference SOTA SSL MIR models](#inference-sota-ssl-mir-models) section below.
 
+## Feature Extraction
 
+Extract frame-level and sequence-level embeddings from audio using any MARBLE encoder. Supports raw audio directories via the `RawAudio` dataset, which automatically handles resampling, channel conversion, and slicing.
+
+```bash
+python cli.py test -c configs/extract.MERT-v1-95M.<dataset>.yaml
+```
+
+Embeddings are saved as per-file `.npy` files organized by layer: `output/extracted_embeddings/<model>_<dataset>/layer{idx}/frame-level/` and `output/extracted_embeddings/<model>_<dataset>/layer{idx}/sequence-level/`. See `configs/extract.MERT-v1-95M.<dataset>.yaml` for configuration options including augmentation and layer selection.
 
 ## Supported/In-coming Tasks and Encoders
 
@@ -103,6 +111,7 @@ Marble is a modular, configuration-driven suite for training, evaluating, and pe
 | **MERT**                     | Music understanding via large-scale self-supervised training with acoustic & musical pseudo-labels.          | [arXiv:2306.00107](https://arxiv.org/abs/2306.00107)          | [GitHub yizhilll/MERT](https://github.com/yizhilll/MERT)  
 | **MuQ**                      | Self-supervised music representation with Mel Residual Vector Quantization.                                  | [arXiv:2501.01108](https://arxiv.org/abs/2501.01108)          | [GitHub Tencent-ailab/MuQ](https://github.com/tencent-ailab/MuQ) |
 | **MuQMuLan**                 | Two-tower contrastive model combining MuQ audio and text for zero-shot tagging.                              | [arXiv:2501.01108](https://arxiv.org/abs/2501.01108)          | [Hugging Face OpenMuQ/MuQ-MuLan-large](https://huggingface.co/OpenMuQ/MuQ-MuLan-large) |
+| **MusicGen**                 | Simple and controllable music generation with text or melody conditioning.                                     | [arXiv:2306.05284](https://arxiv.org/abs/2306.05284)          | [GitHub facebookresearch/audiocraft](https://github.com/facebookresearch/audiocraft) |
 | **MusicFM**                  | Masked-token modeling in music using random projections & codebooks.                                         | [arXiv:2311.03318](https://arxiv.org/abs/2311.03318)          | [GitHub minzwon/musicfm](https://github.com/minzwon/musicfm)    |
 | **Qwen2_5OmniEncoder**       | Qwen 2.5-Omni Audio Tower: a multimodal generalist model supporting text, image, audio, and video.           | [arXiv:2503.20215](https://arxiv.org/abs/2503.20215)          | [GitHub QwenLM/Qwen2.5-Omni](https://github.com/QwenLM/Qwen2.5-Omni) |
 | **Qwen2AudioInstructEncoder** | Instruction-tuned variant of Qwen2-Audio Encoder for interactive audio chat.                                 | [arXiv:2407.10759](https://arxiv.org/abs/2407.10759)          | [GitHub QwenLM/Qwen2-Audio](https://github.com/QwenLM/Qwen2-Audio)  
