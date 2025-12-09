@@ -244,13 +244,19 @@ class BaseAudioDataset(Dataset, ABC):
         Returns:
             waveform (torch.Tensor): Tensor of shape (channels, clip_len_target).
         """
+        if not os.path.exists(path):
+            raise FileNotFoundError(f"Audio file not found: {path}")
+        
         offset = slice_idx * orig_clip_frames
-        waveform, _ = torchaudio.load(
-            path,
-            frame_offset=offset,
-            num_frames=orig_clip_frames,
-            backend=self.backend
-        )  # waveform shape: (orig_channels, actual_frames)
+        try:
+            waveform, _ = torchaudio.load(
+                path,
+                frame_offset=offset,
+                num_frames=orig_clip_frames,
+                backend=self.backend
+            )  # waveform shape: (orig_channels, actual_frames)
+        except (OSError, RuntimeError) as e:
+            raise RuntimeError(f"Failed to load audio file '{path}': {e}") from e
 
         # 1. Channel handling / downmixing / replication
         waveform = self._select_and_mix_channels(waveform)

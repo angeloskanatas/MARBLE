@@ -216,18 +216,28 @@ class LayerSelector(BaseEmbTransform):
     """
     Selects a subset of hidden‐state layers.
     支持整型列表，也支持形如 "start..end" 的字符串范围。
+
+    New: added support for "all" to automatically select all layers
     """
     RANGE_RE = re.compile(r"^(\d+)\.\.(\d+)$")
 
     def __init__(self, layers: Sequence[Union[int, str]]):
         super().__init__()
-        self.layers = self._parse_layers(layers)
-        print(f"LayerSelector initialized with layers: {self.layers}")
+        self.layers_config = layers
+        if isinstance(layers, (list, tuple)) and any(x == "all" or x == "ALL" for x in layers):
+            self.layers = None
+            print("LayerSelector initialized with 'all' - will auto-detect layers at runtime")
+        else:
+            self.layers = self._parse_layers(layers)
+            print(f"LayerSelector initialized with layers: {self.layers}")
 
     def _parse_layers(self, layers):
         parsed = []
         for x in layers:
             if isinstance(x, str):
+                if x.lower() == "all":
+                    # should not reach here if handled in __init__, but just in case
+                    return None
                 m = self.RANGE_RE.match(x.strip())
                 if m:
                     start, end = map(int, m.groups())
@@ -242,6 +252,12 @@ class LayerSelector(BaseEmbTransform):
         return parsed
 
     def forward(self, hidden_states: Sequence[torch.Tensor], **kwargs) -> torch.Tensor:
+        # detect all layers if "all" was specified
+        if self.layers is None:
+            num_layers = len(hidden_states)
+            self.layers = list(range(num_layers))
+            print(f"LayerSelector auto-detected {num_layers} layers: {self.layers}")
+        
         selected = [hidden_states[i] for i in self.layers]
         stacked = torch.stack(selected, dim=1)
         assert stacked.ndim == 4, \
@@ -359,6 +375,55 @@ class TimeAvgPool(BaseEmbTransform):
                 (batch_size, num_layers, 1, hidden_size).
         """
         return reduce(x, 'b l t h -> b l 1 h', 'mean')
+
+
+class TimeMaxPool(BaseEmbTransform):
+    """
+    Computes max pooling over the time dimension.
+    """
+    def forward(self, x: torch.Tensor, **kwargs) -> torch.Tensor:
+        """
+        Args:
+            x (Tensor): Layer‐stacked tensor of shape
+                (batch_size, num_layers, seq_len, hidden_size).
+        Returns:
+            Tensor: Time‐max-pooled tensor of shape
+                (batch_size, num_layers, 1, hidden_size).
+        """
+        return reduce(x, 'b l t h -> b l 1 h', 'max')
+
+
+class TimeLastNConcat(BaseEmbTransform):
+    """
+    Concatenates the last N frames over the time dimension.
+    """
+    def __init__(self, n_frames: int = 1):
+        super().__init__()
+        if n_frames < 1:
+            raise ValueError(f"n_frames must be >= 1, got {n_frames}")
+        self.n_frames = n_frames
+
+    def forward(self, x: torch.Tensor, **kwargs) -> torch.Tensor:
+        """
+        Args:
+            x (Tensor): Layer‐stacked tensor of shape
+                (batch_size, num_layers, seq_len, hidden_size).
+        Returns:
+            Tensor: Concatenated last N frames of shape
+                (batch_size, num_layers, 1, n_frames * hidden_size).
+        """
+        seq_len = x.shape[2]
+        if seq_len < self.n_frames:
+            last_n = x
+            padding = torch.zeros(
+                x.shape[0], x.shape[1], self.n_frames - seq_len, x.shape[3],
+                device=x.device, dtype=x.dtype
+            )
+            last_n = torch.cat([padding, last_n], dim=2)
+        else:
+            last_n = x[:, :, -self.n_frames:, :]
+        
+        return rearrange(last_n, 'b l n h -> b l 1 (n h)')
 
 
 class TimeInterpolation(BaseEmbTransform):

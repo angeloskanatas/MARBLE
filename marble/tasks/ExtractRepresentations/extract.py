@@ -1,0 +1,692 @@
+# marble/tasks/ExtractRepresentations/extract.py
+from pathlib import Path
+from typing import Dict, Tuple, Optional
+from functools import partial
+import hashlib
+import random
+import numpy as np
+import torch
+import torch.nn as nn
+from torch.utils.data import DataLoader
+from tqdm import tqdm
+from lightning.pytorch.utilities.rank_zero import rank_zero_only
+
+from marble.core.base_task import BaseTask
+from marble.core.utils import instantiate_from_config
+from marble.modules.transforms import TimeAvgPool, TimeMaxPool, TimeLastNConcat
+
+try:
+    import audiomentations
+    AUDIOMENTATIONS_AVAILABLE = True
+except ImportError:
+    AUDIOMENTATIONS_AVAILABLE = False
+
+MAX_AUDIO_CHANNELS = 16
+
+
+class ExtractRepresentationsTask(BaseTask):
+    """
+    Extracts frame-level and sequence-level embeddings using MARBLE's encoder and emb_transforms pipeline.
+    
+    Saves embeddings as per-file .npy files organized by layer and type:
+    - output_dir/layer{idx}/frame-level/{file_id}.npy  (shape: T, H)
+    - output_dir/layer{idx}/sequence-level/{file_id}.npy  (shape: H)
+    
+    Processes batches for efficiency but saves per-file to minimize memory usage.
+    """
+
+    def __init__(
+        self,
+        sample_rate: int,
+        encoder: dict,
+        emb_transforms: list[dict],
+        extraction: dict,
+        use_ema: bool = False,
+    ):
+        """
+        Args:
+            sample_rate: Audio sample rate
+            encoder: Encoder config dict
+            emb_transforms: List of embedding transform configs
+            extraction: Extraction config dict with keys:
+                - split: "train", "val", or "test"
+                - output_dir: Directory to save .npy files
+                - max_samples: Optional max number of samples to extract (none = all)
+                - subset_fraction: Optional fraction of dataset to use (0.0-1.0)
+                - save_frame_level: Whether to save frame-level embeddings (default: True)
+                - save_sequence_level: Whether to save sequence-level embeddings (default: True)
+            use_ema: Whether to use EMA (not used for extraction, kept for compatibility)
+        """
+        enc = instantiate_from_config(encoder)
+        all_transforms = [instantiate_from_config(cfg) for cfg in emb_transforms]
+        
+        pooling_classes = (TimeAvgPool, TimeMaxPool, TimeLastNConcat)
+        pooling_idx = None
+        for i, transform in enumerate(all_transforms):
+            if isinstance(transform, pooling_classes):
+                pooling_idx = i
+                break
+        
+        if pooling_idx is not None:
+            frame_transforms = all_transforms[:pooling_idx]
+            sequence_transforms = all_transforms[pooling_idx:]
+        else:
+            frame_transforms = all_transforms
+            sequence_transforms = []
+        
+        super().__init__(
+            encoder=enc,
+            emb_transforms=frame_transforms,
+            decoders=None,
+            losses=None,
+            metrics=None,
+            sample_rate=sample_rate,
+            use_ema=use_ema,
+        )
+        
+        self.sample_rate = sample_rate
+        self.sequence_transforms = nn.ModuleList(sequence_transforms)
+        
+        self.split = extraction.get('split', 'test')
+        if self.split not in ('train', 'val', 'test'):
+            raise ValueError(f"split must be 'train', 'val', or 'test', got '{self.split}'")
+        
+        self.output_dir = Path(extraction.get('output_dir', 'output/extracted_embeddings'))
+        try:
+            self.output_dir.mkdir(parents=True, exist_ok=True)
+            test_file = self.output_dir / '.write_test'
+            test_file.touch()
+            test_file.unlink()
+        except (OSError, PermissionError) as e:
+            raise ValueError(f"Cannot write to output_dir '{self.output_dir}': {e}")
+        
+        max_samples_raw = extraction.get('max_samples')
+        self.max_samples = int(max_samples_raw) if max_samples_raw is not None else None
+        
+        subset_fraction_raw = extraction.get('subset_fraction')
+        self.subset_fraction = float(subset_fraction_raw) if subset_fraction_raw is not None else None
+        
+        if self.max_samples is not None and self.subset_fraction is not None:
+            raise ValueError("Cannot specify both max_samples and subset_fraction")
+        
+        self.save_frame_level = extraction.get('save_frame_level', True)
+        self.save_sequence_level = extraction.get('save_sequence_level', True)
+        
+        if not self.save_frame_level and not self.save_sequence_level:
+            raise ValueError("At least one of save_frame_level or save_sequence_level must be True")
+        
+        augmentation_config = extraction.get('augmentation', None)
+        if augmentation_config and AUDIOMENTATIONS_AVAILABLE:
+            self.num_augmentations = augmentation_config.get('num_augmentations', 2)
+            self.augmentation_seed = augmentation_config.get('seed', None)
+            self.augmentation = self._build_augmentation_pipeline(
+                augmentation_config, sample_rate
+            )
+            seed_msg = f" (seed={self.augmentation_seed})" if self.augmentation_seed is not None else " (non-deterministic)"
+            print(f"Augmentation enabled: {self.num_augmentations} augmentations per sample{seed_msg}")
+        else:
+            self.num_augmentations = 0
+            self.augmentation = None
+            if augmentation_config and not AUDIOMENTATIONS_AVAILABLE:
+                print("Warning: Augmentation config provided but audiomentations not installed.")
+        
+        self._num_samples_processed = 0
+        self._layer_dirs_cache = {}
+
+    def _build_augmentation_pipeline(self, config: dict, sample_rate: int) -> Optional['audiomentations.Compose']:
+        """Build audiomentations pipeline from config.
+        
+        Args:
+            config: Augmentation config dict with 'transforms' key
+            sample_rate: Audio sample rate
+        
+        Returns:
+            Compose object with augmentation transforms, or None if unavailable
+        """
+        if not AUDIOMENTATIONS_AVAILABLE:
+            return None
+        
+        from audiomentations import Compose
+        import inspect
+        
+        transforms_list = config.get('transforms', None)
+        if transforms_list is None:
+            transforms_list = [
+                {'AddGaussianNoise': {'min_amplitude': 0.001, 'max_amplitude': 0.01, 'p': 0.8}},
+                {'TimeStretch': {'min_rate': 0.95, 'max_rate': 1.05, 'p': 0.7}},
+                {'Gain': {'min_gain_db': -3, 'max_gain_db': 3, 'p': 0.6}},
+            ]
+        
+        transforms = []
+        for aug_dict in transforms_list:
+            for aug_name, aug_params in aug_dict.items():
+                aug_module = __import__('audiomentations', fromlist=[aug_name])
+                aug_class = getattr(aug_module, aug_name)
+                
+                aug_params = aug_params.copy()
+                
+                sig = inspect.signature(aug_class.__init__)
+                valid_params = {}
+                
+                for param_name, param_value in aug_params.items():
+                    if param_name in sig.parameters:
+                        valid_params[param_name] = param_value
+                    else:
+                        print(f"Warning: {aug_name} does not accept parameter '{param_name}', skipping")
+                
+                if 'sample_rate' in sig.parameters and 'sample_rate' not in valid_params:
+                    valid_params['sample_rate'] = sample_rate
+                
+                try:
+                    transforms.append(aug_class(**valid_params))
+                except TypeError as e:
+                    raise ValueError(
+                        f"Failed to instantiate {aug_name} with parameters {valid_params}. "
+                        f"Available parameters: {list(sig.parameters.keys())}. Error: {e}"
+                    )
+        
+        return Compose(transforms)
+
+    def _extract_hidden_states(self, encoder_output) -> Tuple[torch.Tensor, ...]:
+        """Extract hidden_states tuple from encoder output (handles dict, tuple, tensor)."""
+        if hasattr(encoder_output, 'hidden_states'):
+            return encoder_output.hidden_states
+        elif isinstance(encoder_output, (tuple, list)):
+            return tuple(encoder_output) if isinstance(encoder_output, list) else encoder_output
+        else:
+            return (encoder_output,)
+
+    def _is_already_pooled(self, hidden_states: Tuple[torch.Tensor, ...]) -> bool:
+        """Check if hidden_states are pooled (no time dimension)."""
+        if not hidden_states or not isinstance(hidden_states[0], torch.Tensor):
+            return False
+        first_hs = hidden_states[0]
+        return first_hs.ndim == 2 or (first_hs.ndim == 3 and first_hs.shape[1] == 1)
+
+    def _get_frame_level_embeddings(self, encoder_output) -> Dict[int, torch.Tensor]:
+        """Extract frame-level embeddings (B, T, H) per layer. Returns empty dict if already pooled."""
+        hidden_states = self._extract_hidden_states(encoder_output)
+        
+        if self._is_already_pooled(hidden_states):
+            return {}
+        
+        hidden_states_transformed = hidden_states
+        for transform in self.emb_transforms:
+            hidden_states_transformed = transform(hidden_states_transformed)
+        
+        frame_embs = {}
+        if isinstance(hidden_states_transformed, torch.Tensor):
+            if hidden_states_transformed.ndim == 4:
+                num_layers = hidden_states_transformed.shape[1]
+                for layer_idx in range(num_layers):
+                    frame_embs[layer_idx] = hidden_states_transformed[:, layer_idx, :, :]
+            elif hidden_states_transformed.ndim == 3:
+                frame_embs[0] = hidden_states_transformed
+            elif hidden_states_transformed.ndim == 2:
+                return {}
+        elif isinstance(hidden_states_transformed, (tuple, list)):
+            for layer_idx, layer_hidden_state in enumerate(hidden_states_transformed):
+                if isinstance(layer_hidden_state, torch.Tensor) and layer_hidden_state.ndim == 3:
+                    frame_embs[layer_idx] = layer_hidden_state
+        
+        return frame_embs
+
+    def _pool_frame_embeddings(self, frame_embs: Dict[int, torch.Tensor]) -> Dict[int, torch.Tensor]:
+        """Pool frame-level (B, T, H) to sequence-level (B, H) embeddings per layer."""
+        if not self.sequence_transforms:
+            return {
+                layer_idx: frame_emb.mean(dim=1) if frame_emb.ndim == 3 else frame_emb
+                for layer_idx, frame_emb in frame_embs.items()
+            }
+        
+        layer_indices = sorted(frame_embs.keys())
+        if not layer_indices:
+            return {}
+        
+        if len(layer_indices) == 1:
+            layer_idx = layer_indices[0]
+            frame_emb = frame_embs[layer_idx]
+            hidden_with_layer_dim = frame_emb.unsqueeze(1)
+            for transform in self.sequence_transforms:
+                hidden_with_layer_dim = transform(hidden_with_layer_dim)
+            
+            if hidden_with_layer_dim.ndim == 4 and hidden_with_layer_dim.shape[1] == 1:
+                return {layer_idx: hidden_with_layer_dim[:, 0, 0, :]}
+            elif hidden_with_layer_dim.ndim == 3 and hidden_with_layer_dim.shape[1] == 1:
+                return {layer_idx: hidden_with_layer_dim[:, 0, :]}
+            elif hidden_with_layer_dim.ndim == 2:
+                return {layer_idx: hidden_with_layer_dim}
+            else:
+                return {layer_idx: frame_emb.mean(dim=1)}
+        
+        stacked_layers = torch.stack([frame_embs[idx] for idx in layer_indices], dim=1)
+        pooled_hidden = stacked_layers
+        for transform in self.sequence_transforms:
+            pooled_hidden = transform(pooled_hidden)
+        
+        sequence_embs = {}
+        if isinstance(pooled_hidden, torch.Tensor):
+            if pooled_hidden.ndim == 4:
+                for i, layer_idx in enumerate(layer_indices):
+                    sequence_embs[layer_idx] = pooled_hidden[:, i, 0, :]
+            elif pooled_hidden.ndim == 3:
+                if pooled_hidden.shape[1] == 1:
+                    sequence_embs[layer_indices[0]] = pooled_hidden[:, 0, :]
+                else:
+                    for i, layer_idx in enumerate(layer_indices):
+                        sequence_embs[layer_idx] = pooled_hidden[:, i, :]
+            elif pooled_hidden.ndim == 2:
+                sequence_embs[layer_indices[0]] = pooled_hidden
+        else:
+            for layer_idx, frame_emb in frame_embs.items():
+                sequence_embs[layer_idx] = frame_emb.mean(dim=1)
+        
+        return sequence_embs
+
+    def _get_sequence_level_embeddings(self, encoder_output) -> Dict[int, torch.Tensor]:
+        """Extract sequence-level embeddings (B, H) per layer. Fallback when frame_embs unavailable."""
+        hidden_states = self._extract_hidden_states(encoder_output)
+        
+        if self._is_already_pooled(hidden_states):
+            sequence_embs = {}
+            for layer_idx, hs in enumerate(hidden_states):
+                if hs.ndim == 2:  # (B, H)
+                    sequence_embs[layer_idx] = hs
+                elif hs.ndim == 3 and hs.shape[1] == 1:  # (B, 1, H)
+                    sequence_embs[layer_idx] = hs[:, 0, :]
+            return sequence_embs
+        
+        hidden_states_transformed = hidden_states
+        for transform in self.emb_transforms:
+            hidden_states_transformed = transform(hidden_states_transformed)
+        for transform in self.sequence_transforms:
+            hidden_states_transformed = transform(hidden_states_transformed)
+        
+        sequence_embs = {}
+        if isinstance(hidden_states_transformed, torch.Tensor):
+            if hidden_states_transformed.ndim == 4:
+                num_layers = hidden_states_transformed.shape[1]
+                for layer_idx in range(num_layers):
+                    sequence_embs[layer_idx] = hidden_states_transformed[:, layer_idx, 0, :]
+            elif hidden_states_transformed.ndim == 3:
+                if hidden_states_transformed.shape[1] == 1:
+                    sequence_embs[0] = hidden_states_transformed[:, 0, :]
+                else:
+                    sequence_embs[0] = hidden_states_transformed.mean(dim=1)
+            elif hidden_states_transformed.ndim == 2:
+                sequence_embs[0] = hidden_states_transformed
+        elif isinstance(hidden_states_transformed, (tuple, list)):
+            for layer_idx, layer_hidden_state in enumerate(hidden_states_transformed):
+                if isinstance(layer_hidden_state, torch.Tensor):
+                    if layer_hidden_state.ndim == 3:
+                        sequence_embs[layer_idx] = layer_hidden_state[:, 0, :] if layer_hidden_state.shape[1] == 1 else layer_hidden_state.mean(dim=1)
+                    elif layer_hidden_state.ndim == 2:
+                        sequence_embs[layer_idx] = layer_hidden_state
+        
+        if not sequence_embs:
+            if isinstance(hidden_states_transformed, torch.Tensor):
+                shape_info = hidden_states_transformed.shape
+            elif isinstance(hidden_states_transformed, (tuple, list)):
+                shape_info = [x.shape if isinstance(x, torch.Tensor) else type(x) for x in hidden_states_transformed]
+            else:
+                shape_info = type(hidden_states_transformed)
+            raise ValueError(f"Failed to extract sequence-level embeddings. Unexpected shape after transforms: {shape_info}")
+        
+        return sequence_embs
+
+    @staticmethod
+    def _multiview_collate_audio_static(
+        batch: list,
+        augmentation: Optional['audiomentations.Compose'] = None,
+        num_augmentations: int = 0,
+        sample_rate: int = 24000,
+        augmentation_seed: Optional[int] = None
+    ) -> Tuple:
+        """Static collate function that creates multiple augmented versions.
+        
+        Args:
+            batch: List of (waveform, target, audio_path) tuples
+            augmentation: audiomentations.Compose object or None
+            num_augmentations: Number of augmentations to create
+            sample_rate: Audio sample rate
+        
+        Returns:
+            If augmentation enabled: tuple of (original_batch, aug0_batch, aug1_batch, ...)
+            If augmentation disabled: single batch tuple (waveforms, targets, audio_paths)
+        
+        Note: All tensors are kept on CPU to support multiprocessing (num_workers > 0).
+        """
+        waveforms = [item[0] for item in batch]
+        targets = [item[1] for item in batch]
+        audio_paths = [item[2] for item in batch]
+        
+        waveforms_cpu = [
+            w.cpu() if isinstance(w, torch.Tensor) and w.device.type != 'cpu' else w
+            for w in waveforms
+        ]
+        original_batch = (torch.stack(waveforms_cpu), targets, audio_paths)
+        
+        if augmentation is None or num_augmentations == 0:
+            return original_batch
+        
+        augmented_batches = []
+        for aug_idx in range(num_augmentations):
+            augmented_waveforms = []
+            for waveform, audio_path in zip(waveforms_cpu, audio_paths):
+                try:
+                    if augmentation_seed is not None:
+                        path_hash = int(hashlib.md5(str(audio_path).encode()).hexdigest()[:8], 16)
+                        seed = augmentation_seed + path_hash + aug_idx
+                        np.random.seed(seed)
+                        random.seed(seed)
+                    
+                    waveform_np = waveform.numpy()
+                    if waveform_np.ndim == 1:
+                        augmented_np = augmentation(samples=waveform_np, sample_rate=sample_rate)
+                    elif waveform_np.ndim == 2:
+                        dim0, dim1 = waveform_np.shape
+                        
+                        if dim0 <= MAX_AUDIO_CHANNELS and dim0 < dim1:
+                            waveform_format = 'channels_first'
+                        elif dim1 <= MAX_AUDIO_CHANNELS and dim1 < dim0:
+                            waveform_format = 'channels_last'
+                        else:
+                            waveform_format = 'channels_first' if dim0 <= dim1 else 'channels_last'
+                        
+                        if waveform_format == 'channels_first':
+                            waveform_for_aug = waveform_np
+                        else:
+                            waveform_for_aug = waveform_np.T
+                        
+                        augmented_np = augmentation(samples=waveform_for_aug, sample_rate=sample_rate)
+                        
+                        if waveform_format == 'channels_last':
+                            augmented_np = augmented_np.T
+                    else:
+                        raise ValueError(f"Unexpected waveform shape: {waveform_np.shape}")
+                    augmented_waveforms.append(torch.from_numpy(augmented_np))
+                except (ValueError, RuntimeError, AttributeError, TypeError) as e:
+                    print(f"Warning: Augmentation failed for sample, using original: {e}")
+                    augmented_waveforms.append(waveform)
+            
+            augmented_batch = (torch.stack(augmented_waveforms), targets, audio_paths)
+            augmented_batches.append(augmented_batch)
+        
+        return (original_batch,) + tuple(augmented_batches)
+
+    def _get_file_id(self, audio_path: str, sample_idx: int, aug_idx: Optional[int] = None) -> str:
+        """Generate unique file identifier from audio path and dataset index."""
+        base_id = Path(audio_path).stem
+        base_id = ''.join(c if (c.isalnum() or c in '._-') else '_' for c in base_id)
+        file_id = f"{base_id}_{sample_idx:06d}"
+        if aug_idx is not None:
+            file_id = f"{file_id}_aug{aug_idx:02d}"
+        return file_id
+    
+    def _get_layer_dir(self, layer_idx: int, emb_type: str) -> Path:
+        """Get or create directory for a specific layer and embedding type."""
+        cache_key = (layer_idx, emb_type)
+        layer_dir = self._layer_dirs_cache.get(cache_key)
+        if layer_dir is None:
+            layer_dir = self.output_dir / f"layer{layer_idx}" / emb_type
+            layer_dir.mkdir(parents=True, exist_ok=True)
+            self._layer_dirs_cache[cache_key] = layer_dir
+        return layer_dir
+    
+    def _save_embeddings(
+        self,
+        embeddings: Dict[int, torch.Tensor],
+        num_samples: int,
+        audio_paths: list,
+        batch_start_count: int,
+        emb_type: str,
+        aug_idx: Optional[int] = None
+    ) -> None:
+        """Save embeddings to disk as per-file .npy files.
+        
+        Args:
+            embeddings: Dict mapping layer_idx to tensor of shape (B, ...)
+            num_samples: Number of samples to save from batch
+            audio_paths: List of audio file paths
+            batch_start_count: Starting sample index for file naming
+            emb_type: Embedding type directory name (e.g., "frame-level", "sequence-level")
+            aug_idx: Optional augmentation index for augmented embeddings
+        """
+        file_ids = [
+            self._get_file_id(audio_paths[i], batch_start_count + i, aug_idx=aug_idx)
+            for i in range(num_samples)
+        ]
+        
+        layer_dirs = {}
+        for layer_idx in embeddings.keys():
+            layer_dirs[layer_idx] = self._get_layer_dir(layer_idx, emb_type)
+        
+        embeddings_cpu = {
+            layer_idx: emb[:num_samples].detach().cpu().numpy()
+            for layer_idx, emb in embeddings.items()
+        }
+        
+        for layer_idx, batch_emb in embeddings_cpu.items():
+            layer_dir = layer_dirs[layer_idx]
+            for sample_idx in range(num_samples):
+                try:
+                    np.save(layer_dir / f"{file_ids[sample_idx]}.npy", batch_emb[sample_idx])
+                except (OSError, IOError) as e:
+                    print(f"Error saving {emb_type} embedding for layer {layer_idx}, sample {sample_idx}: {e}")
+    
+    def _save_frame_level_embeddings(
+        self,
+        frame_embs: Dict[int, torch.Tensor],
+        num_samples: int,
+        audio_paths: list,
+        batch_start_count: int
+    ) -> None:
+        """Save frame-level embeddings (B, T, H) to disk."""
+        self._save_embeddings(
+            frame_embs, num_samples, audio_paths, batch_start_count,
+            emb_type="frame-level", aug_idx=None
+        )
+    
+    def _save_sequence_level_embeddings(
+        self,
+        sequence_embs: Dict[int, torch.Tensor],
+        num_samples: int,
+        audio_paths: list,
+        batch_start_count: int,
+        aug_idx: Optional[int] = None
+    ) -> None:
+        """Save sequence-level embeddings (B, H) to disk."""
+        emb_type = f"sequence-level_aug{aug_idx}" if aug_idx is not None else "sequence-level"
+        self._save_embeddings(
+            sequence_embs, num_samples, audio_paths, batch_start_count,
+            emb_type=emb_type, aug_idx=aug_idx
+        )
+    
+    def test_step(self, batch, batch_idx: int) -> None:
+        """Not used - extraction happens in on_test_start()."""
+        return None
+    
+    @rank_zero_only
+    def on_test_start(self) -> None:
+        """Extract embeddings by manually iterating through the dataloader, saving per-file."""
+        self._num_samples_processed = 0
+        
+        if self.trainer is None or self.trainer.datamodule is None:
+            raise RuntimeError("trainer.datamodule is required for extraction")
+        datamodule = self.trainer.datamodule
+        
+        collate_fn = partial(
+            self._multiview_collate_audio_static,
+            augmentation=self.augmentation,
+            num_augmentations=self.num_augmentations,
+            sample_rate=self.sample_rate,
+            augmentation_seed=self.augmentation_seed
+        )
+        
+        if self.split == 'train':
+            dataset = datamodule.train_dataset
+        elif self.split == 'val':
+            dataset = datamodule.val_dataset
+        else:
+            dataset = datamodule.test_dataset
+        
+        dataloader = DataLoader(
+            dataset,
+            batch_size=datamodule.batch_size,
+            shuffle=False,
+            num_workers=datamodule.num_workers,
+            pin_memory=True,
+            prefetch_factor=2,
+            collate_fn=collate_fn if self.num_augmentations > 0 else None,
+        )
+        
+        total_samples = len(dataloader.dataset)
+        if self.max_samples is not None:
+            total_samples = min(total_samples, self.max_samples)
+        elif self.subset_fraction is not None:
+            total_samples = int(total_samples * self.subset_fraction)
+        
+        batch_size = getattr(dataloader, 'batch_size', None)
+        if batch_size is None:
+            raise ValueError("Cannot extract from IterableDataset - batch_size is None. Use a regular Dataset.")
+        if batch_size <= 0:
+            raise ValueError(f"Invalid batch_size: {batch_size}")
+        expected_batches = (total_samples + batch_size - 1) // batch_size
+        
+        print(f"Extracting representations from {self.split} split")
+        print(f"Total samples in dataset: {len(dataloader.dataset)}")
+        print(f"Samples to extract: {total_samples}")
+        print(f"Batch size: {batch_size}")
+        print(f"Output directory: {self.output_dir}")
+        
+        self.eval()
+        self._layer_dirs_cache.clear()
+        warned_frame_level = False
+        
+        with torch.no_grad():
+            sample_count = 0
+            samples_saved = 0
+            batch_count = 0
+            pbar = tqdm(total=total_samples, desc="Extracting embeddings", unit="sample")
+            
+            for batch in dataloader:
+                if sample_count >= total_samples:
+                    break
+                
+                try:
+                    is_augmented = (
+                        self.num_augmentations > 0
+                        and isinstance(batch, tuple)
+                        and len(batch) > 1
+                        and isinstance(batch[0], tuple)
+                    )
+                    
+                    if is_augmented:
+                        batches_to_process = batch
+                        aug_indices = [None] + list(range(self.num_augmentations))
+                    else:
+                        batches_to_process = (batch,)
+                        aug_indices = [None]
+                    
+                    frame_embs = None
+                    samples_to_take = None
+                    processed_any = False
+                    
+                    for batch_item, aug_idx in zip(batches_to_process, aug_indices):
+                        if len(batch_item) < 2:
+                            raise ValueError(f"Expected batch with at least 2 elements, got {len(batch_item)}")
+                        
+                        waveform = batch_item[0]
+                        audio_paths = batch_item[2] if len(batch_item) > 2 else None
+                        
+                        if audio_paths is None:
+                            raise ValueError("Batch must contain audio paths (batch[2]) for per-file saving")
+                        
+                        if not isinstance(waveform, torch.Tensor) or waveform.ndim < 1:
+                            shape_info = waveform.shape if hasattr(waveform, 'shape') else 'N/A'
+                            raise ValueError(f"Expected tensor with at least 1 dimension, got {type(waveform)} with shape {shape_info}")
+                        
+                        batch_size_actual = waveform.shape[0]
+                        if batch_size_actual == 0:
+                            raise ValueError("Batch size is 0")
+                        
+                        if waveform.device.type != self.device.type:
+                            waveform = waveform.to(self.device)
+                        
+                        if samples_to_take is None:
+                            samples_to_take = min(batch_size_actual, total_samples - sample_count)
+                        
+                        if not isinstance(audio_paths, (list, tuple)):
+                            audio_paths = [str(audio_paths)] * batch_size_actual
+                        elif len(audio_paths) != batch_size_actual:
+                            raise ValueError(f"audio_paths length ({len(audio_paths)}) doesn't match batch_size ({batch_size_actual})")
+                        
+                        try:
+                            encoder_output = self.encoder(waveform)
+                        except RuntimeError as e:
+                            error_msg = str(e).lower()
+                            if 'out of memory' in error_msg or 'cuda' in error_msg:
+                                print(f"Out of memory error processing batch {batch_count + 1}: {e}")
+                                if torch.cuda.is_available():
+                                    torch.cuda.empty_cache()
+                                elif hasattr(torch.backends, 'mps') and torch.backends.mps.is_available():
+                                    torch.mps.empty_cache()
+                            else:
+                                print(f"Error processing batch {batch_count + 1}: {e}")
+                            print(f"Skipping {batch_size_actual} samples from this batch")
+                            continue
+                        
+                        processed_any = True
+                        
+                        if aug_idx is None and self.save_frame_level:
+                            frame_embs = self._get_frame_level_embeddings(encoder_output)
+                            if not frame_embs and not warned_frame_level:
+                                print("Warning: Model returns already-pooled embeddings. Frame-level extraction skipped.")
+                                warned_frame_level = True
+                            elif frame_embs:
+                                self._save_frame_level_embeddings(
+                                    frame_embs, samples_to_take, audio_paths, sample_count
+                                )
+                        
+                        if self.save_sequence_level:
+                            if aug_idx is None and frame_embs is not None:
+                                sequence_embs = self._pool_frame_embeddings(frame_embs)
+                            else:
+                                sequence_embs = self._get_sequence_level_embeddings(encoder_output)
+                            
+                            if sequence_embs:
+                                self._save_sequence_level_embeddings(
+                                    sequence_embs, samples_to_take, audio_paths,
+                                    sample_count, aug_idx=aug_idx
+                                )
+                        
+                        encoder_output = None
+                    
+                    if processed_any and samples_to_take is not None:
+                        sample_count += samples_to_take
+                        samples_saved += samples_to_take
+                        pbar.update(samples_to_take)
+                    pbar.set_description(f"Extracting embeddings (batch {batch_count + 1}/{expected_batches}, saved: {samples_saved}/{total_samples})")
+                    batch_count += 1
+                    
+                except (FileNotFoundError, OSError) as e:
+                    print(f"Error loading batch {batch_count + 1}: {e}")
+                    print(f"Skipping batch {batch_count + 1} due to missing/corrupted audio files")
+                    batch_count += 1
+                    continue
+                except (ValueError, RuntimeError) as e:
+                    print(f"Error processing batch {batch_count + 1}: {e}")
+                    print(f"Skipping batch {batch_count + 1} due to validation/runtime error")
+                    batch_count += 1
+                    continue
+            
+            pbar.close()
+            print(f"Processed {batch_count} batches to extract {samples_saved} samples (attempted {sample_count})")
+        
+        self._num_samples_processed = samples_saved
+
+    @rank_zero_only
+    def on_test_epoch_end(self) -> None:
+        """Print extraction summary."""
+        print(f"\nExtraction complete! Processed {self._num_samples_processed} samples.")
+        print(f"Per-file embeddings saved in: {self.output_dir}")
