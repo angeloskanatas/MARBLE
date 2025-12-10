@@ -7,7 +7,7 @@ import random
 import numpy as np
 import torch
 import torch.nn as nn
-from torch.utils.data import DataLoader
+from torch.utils.data import DataLoader, Subset
 from tqdm import tqdm
 from lightning.pytorch.utilities.rank_zero import rank_zero_only
 
@@ -101,10 +101,20 @@ class ExtractRepresentationsTask(BaseTask):
             raise ValueError(f"Cannot write to output_dir '{self.output_dir}': {e}")
         
         max_samples_raw = extraction.get('max_samples')
-        self.max_samples = int(max_samples_raw) if max_samples_raw is not None else None
+        if max_samples_raw is not None:
+            self.max_samples = int(max_samples_raw)
+            if self.max_samples <= 0:
+                raise ValueError(f"max_samples must be positive, got {self.max_samples}")
+        else:
+            self.max_samples = None
         
         subset_fraction_raw = extraction.get('subset_fraction')
-        self.subset_fraction = float(subset_fraction_raw) if subset_fraction_raw is not None else None
+        if subset_fraction_raw is not None:
+            self.subset_fraction = float(subset_fraction_raw)
+            if not (0.0 < self.subset_fraction <= 1.0):
+                raise ValueError(f"subset_fraction must be in (0.0, 1.0], got {self.subset_fraction}")
+        else:
+            self.subset_fraction = None
         
         if self.max_samples is not None and self.subset_fraction is not None:
             raise ValueError("Cannot specify both max_samples and subset_fraction")
@@ -502,9 +512,9 @@ class ExtractRepresentationsTask(BaseTask):
             emb_type=emb_type, aug_idx=aug_idx
         )
     
-    def test_step(self, batch, batch_idx: int) -> None:
+    def test_step(self, batch, batch_idx: int) -> dict:
         """Not used - extraction happens in on_test_start()."""
-        return None
+        return {}
     
     @rank_zero_only
     def on_test_start(self) -> None:
@@ -530,6 +540,23 @@ class ExtractRepresentationsTask(BaseTask):
         else:
             dataset = datamodule.test_dataset
         
+        original_total_samples = len(dataset)
+        total_samples = original_total_samples
+        subset_indices = None
+        
+        if self.max_samples is not None and self.max_samples < original_total_samples:
+            subset_indices = list(range(self.max_samples))
+            total_samples = self.max_samples
+        elif self.subset_fraction is not None:
+            subset_size = int(original_total_samples * self.subset_fraction)
+            if subset_size == 0:
+                raise ValueError(f"subset_fraction {self.subset_fraction} results in 0 samples from {original_total_samples} total")
+            subset_indices = list(range(subset_size))
+            total_samples = subset_size
+        
+        if subset_indices is not None:
+            dataset = Subset(dataset, subset_indices)
+        
         dataloader = DataLoader(
             dataset,
             batch_size=datamodule.batch_size,
@@ -537,14 +564,8 @@ class ExtractRepresentationsTask(BaseTask):
             num_workers=datamodule.num_workers,
             pin_memory=True,
             prefetch_factor=2,
-            collate_fn=collate_fn if self.num_augmentations > 0 else None,
+            collate_fn=collate_fn,
         )
-        
-        total_samples = len(dataloader.dataset)
-        if self.max_samples is not None:
-            total_samples = min(total_samples, self.max_samples)
-        elif self.subset_fraction is not None:
-            total_samples = int(total_samples * self.subset_fraction)
         
         batch_size = getattr(dataloader, 'batch_size', None)
         if batch_size is None:
@@ -554,7 +575,7 @@ class ExtractRepresentationsTask(BaseTask):
         expected_batches = (total_samples + batch_size - 1) // batch_size
         
         print(f"Extracting representations from {self.split} split")
-        print(f"Total samples in dataset: {len(dataloader.dataset)}")
+        print(f"Total samples in dataset: {original_total_samples}")
         print(f"Samples to extract: {total_samples}")
         print(f"Batch size: {batch_size}")
         print(f"Output directory: {self.output_dir}")
@@ -570,9 +591,6 @@ class ExtractRepresentationsTask(BaseTask):
             pbar = tqdm(total=total_samples, desc="Extracting embeddings", unit="sample")
             
             for batch in dataloader:
-                if sample_count >= total_samples:
-                    break
-                
                 try:
                     is_augmented = (
                         self.num_augmentations > 0
@@ -588,33 +606,32 @@ class ExtractRepresentationsTask(BaseTask):
                         batches_to_process = (batch,)
                         aug_indices = [None]
                     
+                    first_batch_item = batches_to_process[0]
+                    if len(first_batch_item) < 2:
+                        raise ValueError(f"Expected batch with at least 2 elements, got {len(first_batch_item)}")
+                    
+                    first_waveform = first_batch_item[0]
+                    if not isinstance(first_waveform, torch.Tensor) or first_waveform.ndim < 1:
+                        shape_info = first_waveform.shape if hasattr(first_waveform, 'shape') else 'N/A'
+                        raise ValueError(f"Expected tensor with at least 1 dimension, got {type(first_waveform)} with shape {shape_info}")
+                    
+                    batch_size_actual = first_waveform.shape[0]
+                    if batch_size_actual == 0:
+                        raise ValueError("Batch size is 0")
+                    
+                    samples_to_take = batch_size_actual
                     frame_embs = None
-                    samples_to_take = None
                     processed_any = False
                     
                     for batch_item, aug_idx in zip(batches_to_process, aug_indices):
-                        if len(batch_item) < 2:
-                            raise ValueError(f"Expected batch with at least 2 elements, got {len(batch_item)}")
-                        
                         waveform = batch_item[0]
                         audio_paths = batch_item[2] if len(batch_item) > 2 else None
                         
                         if audio_paths is None:
                             raise ValueError("Batch must contain audio paths (batch[2]) for per-file saving")
                         
-                        if not isinstance(waveform, torch.Tensor) or waveform.ndim < 1:
-                            shape_info = waveform.shape if hasattr(waveform, 'shape') else 'N/A'
-                            raise ValueError(f"Expected tensor with at least 1 dimension, got {type(waveform)} with shape {shape_info}")
-                        
-                        batch_size_actual = waveform.shape[0]
-                        if batch_size_actual == 0:
-                            raise ValueError("Batch size is 0")
-                        
                         if waveform.device.type != self.device.type:
                             waveform = waveform.to(self.device)
-                        
-                        if samples_to_take is None:
-                            samples_to_take = min(batch_size_actual, total_samples - sample_count)
                         
                         if not isinstance(audio_paths, (list, tuple)):
                             audio_paths = [str(audio_paths)] * batch_size_actual
@@ -662,7 +679,7 @@ class ExtractRepresentationsTask(BaseTask):
                         
                         encoder_output = None
                     
-                    if processed_any and samples_to_take is not None:
+                    if processed_any:
                         sample_count += samples_to_take
                         samples_saved += samples_to_take
                         pbar.update(samples_to_take)

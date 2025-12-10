@@ -3,11 +3,10 @@
 import os
 import json
 from abc import ABCMeta, abstractmethod, ABC
-from typing import Sequence, Union, Dict, List, Tuple, Optional
+from typing import List, Tuple, Optional
 
 import torch
 import torchaudio
-import torch.nn as nn
 import torch.nn.functional as F
 from torch.utils.data import Dataset, DataLoader
 import lightning.pytorch as pl
@@ -38,25 +37,27 @@ class BaseDataModule(pl.LightningDataModule, metaclass=ABCMeta):
         self.test_config  = test
 
     def _wrap(self, dataset: Dataset, stage: str) -> Dataset:
-        """根据 stage 选对应的 transforms 列表来 wrap Dataset"""
+        """Wrap dataset with stage-specific audio transforms."""
         transforms = [
             instantiate_from_config(cfg) 
             for cfg in self.audio_transforms.get(stage, [])
         ]
         if transforms:
             return AudioTransformDataset(dataset, transforms)
-        print(f"No transforms for stage '{stage}', using original dataset.")
         return dataset
 
     def setup(self, stage: str | None = None):
-        # 原始 train/val dataset
-        train_ds = instantiate_from_config(self.train_config)
-        val_ds   = instantiate_from_config(self.val_config)
-        # 分别 wrap
-        self.train_dataset = self._wrap(train_ds, "train")
-        self.val_dataset   = self._wrap(val_ds,   "val")
-        test_ds = instantiate_from_config(self.test_config)
-        self.test_dataset = self._wrap(test_ds, "test")
+        if stage in (None, "fit"):
+            train_ds = instantiate_from_config(self.train_config)
+            self.train_dataset = self._wrap(train_ds, "train")
+        
+        if stage in (None, "fit", "validate"):
+            val_ds = instantiate_from_config(self.val_config)
+            self.val_dataset = self._wrap(val_ds, "val")
+        
+        if stage in (None, "test", "predict"):
+            test_ds = instantiate_from_config(self.test_config)
+            self.test_dataset = self._wrap(test_ds, "test")
 
     def train_dataloader(self):
         return DataLoader(

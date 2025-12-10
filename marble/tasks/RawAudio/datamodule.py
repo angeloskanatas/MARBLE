@@ -2,11 +2,12 @@
 
 from pathlib import Path
 from typing import List, Tuple, Optional
+import random
 
 import torch
 import torchaudio
 import torch.nn.functional as F
-from torch.utils.data import Dataset
+from torch.utils.data import Dataset, DataLoader
 
 from marble.core.base_datamodule import BaseDataModule
 from marble.utils.utils import list_audio_files
@@ -33,6 +34,8 @@ class SimpleRawAudioDataset(Dataset):
         backend: Optional[str] = None,
         extensions: Tuple[str, ...] = ('.wav', '.flac', '.mp3', '.webm', '.mp4'),
         recursive: bool = True,
+        max_files: Optional[int] = None,
+        random_seed: Optional[int] = None,
     ):
         """
         Args:
@@ -46,6 +49,11 @@ class SimpleRawAudioDataset(Dataset):
             backend: torchaudio backend to use (e.g., "soundfile", "sox_io").
             extensions: File extensions to consider as audio files.
             recursive: If True, search recursively in subdirectories.
+            max_files: Optional maximum number of files to process. If set, files are randomly
+                      sampled before metadata loading (much faster for large datasets).
+                      If None, processes all files.
+            random_seed: Random seed for file sampling when max_files is set. If None, uses
+                        system random (non-deterministic).
         """
         self.sample_rate = int(sample_rate)
         self.channels = channels
@@ -58,7 +66,6 @@ class SimpleRawAudioDataset(Dataset):
         if self.channel_mode not in ["first", "mix", "random"]:
             raise ValueError(f"Unknown channel_mode: {self.channel_mode}. Must be 'first', 'mix', or 'random'")
         
-        # Scan directory for audio files
         audio_dir_path = Path(audio_dir)
         if not audio_dir_path.exists():
             raise ValueError(f"Audio directory not found: {audio_dir}")
@@ -67,12 +74,27 @@ class SimpleRawAudioDataset(Dataset):
         if len(audio_files) == 0:
             raise ValueError(f"No audio files found in {audio_dir}")
         
-        print(f"Found {len(audio_files)} audio files in {audio_dir}")
+        total_files = len(audio_files)
         
-        # Build metadata on-the-fly using torchaudio.info()
+        if max_files is not None:
+            if max_files <= 0:
+                raise ValueError(f"max_files must be positive, got {max_files}")
+            if max_files < total_files:
+                if random_seed is not None:
+                    rng = random.Random(random_seed)
+                    audio_files = rng.sample(audio_files, max_files)
+                    audio_files = sorted(audio_files)
+                else:
+                    audio_files = random.sample(audio_files, max_files)
+                    audio_files = sorted(audio_files)
+        
         self.meta: List[dict] = []
         self.resamplers = {}
         
+        if max_files is not None and max_files < total_files:
+            print(f"Loading metadata for {len(audio_files)}/{total_files} files...")
+        else:
+            print(f"Loading metadata for {len(audio_files)} files...")
         for audio_path in audio_files:
             try:
                 info = torchaudio.info(str(audio_path), backend=self.backend)
@@ -87,7 +109,6 @@ class SimpleRawAudioDataset(Dataset):
                     "channels": num_channels
                 })
                 
-                # Prepare resampler if needed
                 if orig_sr != self.sample_rate and orig_sr not in self.resamplers:
                     self.resamplers[orig_sr] = torchaudio.transforms.Resample(orig_sr, self.sample_rate)
                     
@@ -98,7 +119,6 @@ class SimpleRawAudioDataset(Dataset):
         if len(self.meta) == 0:
             raise ValueError(f"No valid audio files found in {audio_dir}")
         
-        # Build index map: (file_idx, slice_idx, orig_sr, orig_clip_frames, orig_channels)
         self.index_map: List[Tuple[int, int, int, int, int]] = []
         
         for file_idx, info in enumerate(self.meta):
@@ -110,11 +130,9 @@ class SimpleRawAudioDataset(Dataset):
             if orig_clip_frames <= 0:
                 continue
             
-            # Number of full clips and remainder
             n_full = total_samples // orig_clip_frames
             rem = total_samples - n_full * orig_clip_frames
             
-            # Decide whether to keep the last shorter clip
             if rem / orig_clip_frames >= self.min_clip_ratio:
                 n_slices = n_full + 1
             else:
@@ -137,12 +155,10 @@ class SimpleRawAudioDataset(Dataset):
             target: None (for extraction tasks)
             path: str (audio file path)
         """
-        # Unpack mapping info
         file_idx, slice_idx, orig_sr, orig_clip, orig_channels = self.index_map[idx]
         info = self.meta[file_idx]
         path = info['audio_path']
         
-        # Compute frame offset and load clip
         offset = slice_idx * orig_clip
         try:
             waveform, _ = torchaudio.load(
@@ -150,11 +166,10 @@ class SimpleRawAudioDataset(Dataset):
                 frame_offset=offset,
                 num_frames=orig_clip,
                 backend=self.backend
-            )  # (orig_channels, orig_clip)
+            )
         except (OSError, RuntimeError) as e:
             raise RuntimeError(f"Failed to load audio file '{path}': {e}") from e
         
-        # Channel alignment / downmixing
         if orig_channels >= self.channels:
             if self.channels == 1:
                 if self.channel_mode == "first":
@@ -170,22 +185,35 @@ class SimpleRawAudioDataset(Dataset):
             else:
                 waveform = waveform[:self.channels]
         else:
-            # Repeat last channel to pad to desired channels
             last = waveform[-1:].repeat(self.channels - orig_channels, 1)
             waveform = torch.cat([waveform, last], dim=0)
         
-        # Resample if needed
         if orig_sr != self.sample_rate:
             waveform = self.resamplers[orig_sr](waveform)
         
-        # Pad to target length if short
         if waveform.size(1) < self.clip_len_target:
             pad = self.clip_len_target - waveform.size(1)
             waveform = F.pad(waveform, (0, pad))
         
-        # Final shape: (self.channels, self.clip_len_target)
         return waveform, None, path
 
 
 class RawAudioDataModule(BaseDataModule):
-    pass
+    @staticmethod
+    def _collate_fn(batch):
+        """Collate function that handles None targets."""
+        waveforms = [item[0] for item in batch]
+        targets = [item[1] for item in batch]
+        paths = [item[2] for item in batch]
+        return torch.stack(waveforms), targets, paths
+    
+    def test_dataloader(self):
+        return DataLoader(
+            self.test_dataset,
+            batch_size=self.batch_size,
+            shuffle=False,
+            num_workers=self.num_workers,
+            pin_memory=True,
+            prefetch_factor=2,
+            collate_fn=self._collate_fn,
+        )

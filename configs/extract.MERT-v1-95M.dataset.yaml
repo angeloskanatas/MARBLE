@@ -44,8 +44,8 @@ model:
     extraction:
       split: test  # options: train, val, test
       output_dir: output/extracted_embeddings/mert-95M_<dataset>/
-      max_samples: null # null = all samples
-      # subset_fraction: 0.1  # alternative to max_samples: use x% of dataset
+      max_samples: null  # null = all samples, or set to limit samples processed
+      # subset_fraction: 0.1  # alternative to max_samples
       save_frame_level: true   # frame-level embeddings (N, T, H)
       save_sequence_level: true  # sequence-level embeddings (N, H)
       # Note: models that DO support frame-level: MERT, MuQ, MusicFM, MusicGen, DaSheng, Xcodec, Qwen2Audio; models that DON'T support frame-level: MuQMuLan, CLaMP3 (already pooled)
@@ -84,8 +84,8 @@ model:
 data:
   class_path: marble.tasks.RawAudio.datamodule.RawAudioDataModule
   init_args:
-    batch_size: 2
-    num_workers: 4
+    batch_size: 8
+    num_workers: 8
 
     audio_transforms:
       train:
@@ -104,12 +104,10 @@ data:
             pre_trained_folder: null
             squeeze: true
 
-    # BaseDataModule requires all three splits, but extraction uses only the split specified in extraction.split
-    # For extraction, you can set train/val/test to the same dataset or use different directories
     train:
       class_path: marble.tasks.RawAudio.datamodule.SimpleRawAudioDataset
       init_args:
-        audio_dir: /path/to/audio/files
+        audio_dir: /Users/ankanatas/mtg/MARBLE/data/EMO/emomusic/wav
         sample_rate: 24000
         channels: 1
         clip_seconds: 15.0
@@ -117,10 +115,12 @@ data:
         channel_mode: first
         extensions: ['.wav', '.flac', '.mp3', '.webm', '.mp4']
         recursive: true
+        max_files: null
+        random_seed: 42
     val:
       class_path: marble.tasks.RawAudio.datamodule.SimpleRawAudioDataset
       init_args:
-        audio_dir: /path/to/audio/files
+        audio_dir: /Users/ankanatas/mtg/MARBLE/data/EMO/emomusic/wav
         sample_rate: 24000
         channels: 1
         clip_seconds: 15.0
@@ -128,10 +128,12 @@ data:
         channel_mode: first
         extensions: ['.wav', '.flac', '.mp3', '.webm', '.mp4']
         recursive: true
+        max_files: null
+        random_seed: 42
     test:
       class_path: marble.tasks.RawAudio.datamodule.SimpleRawAudioDataset
       init_args:
-        audio_dir: /path/to/audio/files
+        audio_dir: /Users/ankanatas/mtg/MARBLE/data/EMO/emomusic/wav
         sample_rate: 24000
         channels: 1
         clip_seconds: 15.0
@@ -139,6 +141,8 @@ data:
         channel_mode: first  # first, random, mix
         extensions: ['.wav', '.flac', '.mp3', '.webm', '.mp4']  # optional: specify file extensions
         recursive: true  # optional: search recursively in subdirectories
+        max_files: 20  # null = all files
+        random_seed: 42
         # backend: null  # optional: torchaudio backend (e.g., "soundfile", "sox_io")
 
 # not needed for extraction, but LightningCLI may require them
