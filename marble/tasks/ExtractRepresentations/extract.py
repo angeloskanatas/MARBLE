@@ -370,10 +370,16 @@ class ExtractRepresentationsTask(BaseTask):
         targets = [item[1] for item in batch]
         audio_paths = [item[2] for item in batch]
         
-        waveforms_cpu = [
-            w.cpu() if isinstance(w, torch.Tensor) and w.device.type != 'cpu' else w
-            for w in waveforms
-        ]
+        waveforms_cpu = []
+        for w in waveforms:
+            if isinstance(w, torch.Tensor):
+                waveforms_cpu.append(w.cpu() if w.device.type != 'cpu' else w)
+            elif isinstance(w, (list, tuple, np.ndarray)):
+                waveforms_cpu.append(torch.as_tensor(w))
+            else:
+                raise ValueError(f"Expected tensor, list, tuple, or numpy array, got {type(w)}")
+        if not waveforms_cpu:
+            raise ValueError("No valid waveforms found in batch")
         original_batch = (torch.stack(waveforms_cpu), targets, audio_paths)
         
         if augmentation is None or num_augmentations == 0:
@@ -574,10 +580,14 @@ class ExtractRepresentationsTask(BaseTask):
             raise ValueError(f"Invalid batch_size: {batch_size}")
         expected_batches = (total_samples + batch_size - 1) // batch_size
         
-        print(f"Extracting representations from {self.split} split")
-        print(f"Total samples in dataset: {original_total_samples}")
-        print(f"Samples to extract: {total_samples}")
-        print(f"Batch size: {batch_size}")
+        print(f"\nExtracting representations from {self.split} split")
+        if self.max_samples is not None:
+            print(f"Dataset: {original_total_samples} total samples, extracting {total_samples} (max_samples={self.max_samples})")
+        elif self.subset_fraction is not None:
+            print(f"Dataset: {original_total_samples} total samples, extracting {total_samples} (subset_fraction={self.subset_fraction:.2%})")
+        else:
+            print(f"Dataset: {total_samples} total samples (extracting all)")
+        print(f"Batch size: {batch_size}, Workers: {datamodule.num_workers}")
         print(f"Output directory: {self.output_dir}")
         
         self.eval()
@@ -597,23 +607,32 @@ class ExtractRepresentationsTask(BaseTask):
                         and isinstance(batch, tuple)
                         and len(batch) > 1
                         and isinstance(batch[0], tuple)
+                        and len(batch[0]) >= 2
                     )
                     
                     if is_augmented:
                         batches_to_process = batch
                         aug_indices = [None] + list(range(self.num_augmentations))
                     else:
+                        if not isinstance(batch, tuple) or len(batch) < 2:
+                            raise ValueError(f"Expected batch tuple with at least 2 elements, got {type(batch)} with length {len(batch) if isinstance(batch, (tuple, list)) else 'N/A'}")
                         batches_to_process = (batch,)
                         aug_indices = [None]
                     
                     first_batch_item = batches_to_process[0]
-                    if len(first_batch_item) < 2:
-                        raise ValueError(f"Expected batch with at least 2 elements, got {len(first_batch_item)}")
+                    if not isinstance(first_batch_item, tuple) or len(first_batch_item) < 2:
+                        raise ValueError(f"Expected batch item tuple with at least 2 elements, got {type(first_batch_item)} with length {len(first_batch_item) if isinstance(first_batch_item, (tuple, list)) else 'N/A'}")
                     
                     first_waveform = first_batch_item[0]
-                    if not isinstance(first_waveform, torch.Tensor) or first_waveform.ndim < 1:
+                    if isinstance(first_waveform, (list, tuple, np.ndarray)):
+                        first_waveform = torch.as_tensor(first_waveform)
+                        first_batch_item = (first_waveform,) + first_batch_item[1:]
+                        batches_to_process = (first_batch_item,) + batches_to_process[1:] if len(batches_to_process) > 1 else (first_batch_item,)
+                    if not isinstance(first_waveform, torch.Tensor):
                         shape_info = first_waveform.shape if hasattr(first_waveform, 'shape') else 'N/A'
-                        raise ValueError(f"Expected tensor with at least 1 dimension, got {type(first_waveform)} with shape {shape_info}")
+                        raise ValueError(f"Expected tensor, got {type(first_waveform)} with shape {shape_info}")
+                    if first_waveform.ndim < 1:
+                        raise ValueError(f"Expected tensor with at least 1 dimension, got {first_waveform.ndim} dimensions")
                     
                     batch_size_actual = first_waveform.shape[0]
                     if batch_size_actual == 0:
@@ -705,5 +724,8 @@ class ExtractRepresentationsTask(BaseTask):
     @rank_zero_only
     def on_test_epoch_end(self) -> None:
         """Print extraction summary."""
-        print(f"\nExtraction complete! Processed {self._num_samples_processed} samples.")
-        print(f"Per-file embeddings saved in: {self.output_dir}")
+        print(f"\n{'='*60}")
+        print("Extraction complete!")
+        print(f"  Samples processed: {self._num_samples_processed}")
+        print(f"  Output directory: {self.output_dir}")
+        print(f"{'='*60}")

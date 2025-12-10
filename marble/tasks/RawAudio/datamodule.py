@@ -8,6 +8,7 @@ import torch
 import torchaudio
 import torch.nn.functional as F
 from torch.utils.data import Dataset, DataLoader
+from tqdm import tqdm
 
 from marble.core.base_datamodule import BaseDataModule
 from marble.utils.utils import list_audio_files
@@ -75,27 +76,29 @@ class SimpleRawAudioDataset(Dataset):
             raise ValueError(f"No audio files found in {audio_dir}")
         
         total_files = len(audio_files)
+        files_after_filtering = total_files
         
         if max_files is not None:
             if max_files <= 0:
                 raise ValueError(f"max_files must be positive, got {max_files}")
             if max_files < total_files:
-                if random_seed is not None:
-                    rng = random.Random(random_seed)
-                    audio_files = rng.sample(audio_files, max_files)
-                    audio_files = sorted(audio_files)
-                else:
-                    audio_files = random.sample(audio_files, max_files)
-                    audio_files = sorted(audio_files)
+                if random_seed is None:
+                    raise ValueError("random_seed must be provided when max_files is set to ensure deterministic file sampling")
+                rng = random.Random(random_seed)
+                audio_files = rng.sample(audio_files, max_files)
+                audio_files = sorted(audio_files)
+                files_after_filtering = len(audio_files)
+                print(f"Found {total_files} audio files, sampling {files_after_filtering} files (max_files={max_files}, seed={random_seed})")
+            else:
+                print(f"Found {total_files} audio files (max_files={max_files} >= total, using all files)")
+        else:
+            print(f"Found {total_files} audio files")
         
         self.meta: List[dict] = []
         self.resamplers = {}
         
-        if max_files is not None and max_files < total_files:
-            print(f"Loading metadata for {len(audio_files)}/{total_files} files...")
-        else:
-            print(f"Loading metadata for {len(audio_files)} files...")
-        for audio_path in audio_files:
+        print(f"Loading metadata for {files_after_filtering} files...")
+        for audio_path in tqdm(audio_files, desc="Loading metadata", unit="file"):
             try:
                 info = torchaudio.info(str(audio_path), backend=self.backend)
                 orig_sr = info.sample_rate
@@ -118,6 +121,11 @@ class SimpleRawAudioDataset(Dataset):
         
         if len(self.meta) == 0:
             raise ValueError(f"No valid audio files found in {audio_dir}")
+        
+        valid_files = len(self.meta)
+        if valid_files < files_after_filtering:
+            print(f"Warning: {files_after_filtering - valid_files} files failed metadata loading")
+        print(f"Successfully loaded {valid_files} files, generating clips...")
         
         self.index_map: List[Tuple[int, int, int, int, int]] = []
         
@@ -142,6 +150,9 @@ class SimpleRawAudioDataset(Dataset):
                 self.index_map.append(
                     (file_idx, slice_idx, orig_sr, orig_clip_frames, orig_channels)
                 )
+        
+        total_clips = len(self.index_map)
+        print(f"Dataset initialized: {valid_files} files, {total_clips} clips (avg {total_clips/valid_files:.1f} clips/file)")
     
     def __len__(self):
         return len(self.index_map)
