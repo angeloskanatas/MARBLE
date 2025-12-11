@@ -132,8 +132,8 @@ class ExtractRepresentationsTask(BaseTask):
             self.augmentation = self._build_augmentation_pipeline(
                 augmentation_config, sample_rate
             )
-            seed_msg = f" (seed={self.augmentation_seed})" if self.augmentation_seed is not None else " (non-deterministic)"
-            print(f"Augmentation enabled: {self.num_augmentations} augmentations per sample{seed_msg}")
+            seed_msg = f" (seed={self.augmentation_seed})" if self.augmentation_seed is not None else ""
+            print(f"Augmentations: {self.num_augmentations} per sample{seed_msg}")
         else:
             self.num_augmentations = 0
             self.augmentation = None
@@ -488,7 +488,7 @@ class ExtractRepresentationsTask(BaseTask):
                 try:
                     np.save(layer_dir / f"{file_ids[sample_idx]}.npy", batch_emb[sample_idx])
                 except (OSError, IOError) as e:
-                    print(f"Error saving {emb_type} embedding for layer {layer_idx}, sample {sample_idx}: {e}")
+                    print(f"Error saving {emb_type} embedding (layer {layer_idx}, file_id: {file_ids[sample_idx]}): {e}")
     
     def _save_frame_level_embeddings(
         self,
@@ -580,15 +580,24 @@ class ExtractRepresentationsTask(BaseTask):
             raise ValueError(f"Invalid batch_size: {batch_size}")
         expected_batches = (total_samples + batch_size - 1) // batch_size
         
-        print(f"\nExtracting representations from {self.split} split")
+        print(f"\nExtracting from {self.split} split")
         if self.max_samples is not None:
-            print(f"Dataset: {original_total_samples} total samples, extracting {total_samples} (max_samples={self.max_samples})")
+            print(f"Dataset: {original_total_samples:,} samples, extracting {total_samples:,} (max_samples={self.max_samples:,})")
         elif self.subset_fraction is not None:
-            print(f"Dataset: {original_total_samples} total samples, extracting {total_samples} (subset_fraction={self.subset_fraction:.2%})")
+            print(f"Dataset: {original_total_samples:,} samples, extracting {total_samples:,} ({self.subset_fraction:.2%})")
         else:
-            print(f"Dataset: {total_samples} total samples (extracting all)")
-        print(f"Batch size: {batch_size}, Workers: {datamodule.num_workers}")
-        print(f"Output directory: {self.output_dir}")
+            print(f"Dataset: {total_samples:,} samples")
+        print(f"Batch size: {batch_size}, Workers: {datamodule.num_workers}, Expected batches: {expected_batches:,}")
+        print(f"Output: {self.output_dir}")
+        saving_types = []
+        if self.save_frame_level:
+            saving_types.append("frame-level")
+        if self.save_sequence_level:
+            saving_types.append("sequence-level")
+        print(f"Saving: {', '.join(saving_types)}")
+        if self.num_augmentations > 0:
+            print(f"Augmentations: {self.num_augmentations} per sample")
+        print()
         
         self.eval()
         self._layer_dirs_cache.clear()
@@ -670,15 +679,19 @@ class ExtractRepresentationsTask(BaseTask):
                             encoder_output = self.encoder(waveform)
                         except RuntimeError as e:
                             error_msg = str(e).lower()
-                            if 'out of memory' in error_msg or 'cuda' in error_msg:
-                                print(f"Out of memory error processing batch {batch_count + 1}: {e}")
+                            is_oom = (
+                                'out of memory' in error_msg or 
+                                'cuda' in error_msg or 
+                                'mps' in error_msg
+                            )
+                            if is_oom:
+                                print(f"OOM error in batch {batch_count + 1}: {e}. Skipping {batch_size_actual} samples.")
                                 if torch.cuda.is_available():
                                     torch.cuda.empty_cache()
                                 elif hasattr(torch.backends, 'mps') and torch.backends.mps.is_available():
                                     torch.mps.empty_cache()
                             else:
-                                print(f"Error processing batch {batch_count + 1}: {e}")
-                            print(f"Skipping {batch_size_actual} samples from this batch")
+                                print(f"Error in batch {batch_count + 1}: {e}. Skipping {batch_size_actual} samples.")
                             continue
                         
                         processed_any = True
@@ -686,7 +699,7 @@ class ExtractRepresentationsTask(BaseTask):
                         if aug_idx is None and self.save_frame_level:
                             frame_embs = self._get_frame_level_embeddings(encoder_output)
                             if not frame_embs and not warned_frame_level:
-                                print("Warning: Model returns already-pooled embeddings. Frame-level extraction skipped.")
+                                print("Warning: Model returns already-pooled embeddings. Skipping frame-level extraction.")
                                 warned_frame_level = True
                             elif frame_embs:
                                 self._save_frame_level_embeddings(
@@ -715,26 +728,22 @@ class ExtractRepresentationsTask(BaseTask):
                     batch_count += 1
                     
                 except (FileNotFoundError, OSError) as e:
-                    print(f"Error loading batch {batch_count + 1}: {e}")
-                    print(f"Skipping batch {batch_count + 1} due to missing/corrupted audio files")
+                    print(f"Error loading batch {batch_count + 1}/{expected_batches}: {e}. Skipping.")
                     batch_count += 1
                     continue
                 except (ValueError, RuntimeError) as e:
-                    print(f"Error processing batch {batch_count + 1}: {e}")
-                    print(f"Skipping batch {batch_count + 1} due to validation/runtime error")
+                    print(f"Error processing batch {batch_count + 1}/{expected_batches}: {e}. Skipping.")
                     batch_count += 1
                     continue
             
             pbar.close()
-            print(f"Processed {batch_count} batches to extract {samples_saved} samples (attempted {sample_count})")
+            print(f"\nExtraction complete: {samples_saved:,}/{total_samples:,} samples saved")
+            if sample_count > samples_saved:
+                print(f"Skipped {sample_count - samples_saved:,} samples due to errors")
         
         self._num_samples_processed = samples_saved
 
     @rank_zero_only
     def on_test_epoch_end(self) -> None:
         """Print extraction summary."""
-        print(f"\n{'='*60}")
-        print("Extraction complete!")
-        print(f"  Samples processed: {self._num_samples_processed}")
-        print(f"  Output directory: {self.output_dir}")
-        print(f"{'='*60}")
+        print(f"Output: {self.output_dir}")

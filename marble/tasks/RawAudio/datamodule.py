@@ -88,16 +88,16 @@ class SimpleRawAudioDataset(Dataset):
                 audio_files = rng.sample(audio_files, max_files)
                 audio_files = sorted(audio_files)
                 files_after_filtering = len(audio_files)
-                print(f"Found {total_files} audio files, sampling {files_after_filtering} files (max_files={max_files}, seed={random_seed})")
+                print(f"Found {total_files:,} audio files, sampling {files_after_filtering:,} files (max_files={max_files:,}, seed={random_seed})")
             else:
-                print(f"Found {total_files} audio files (max_files={max_files} >= total, using all files)")
+                print(f"Found {total_files:,} audio files (max_files={max_files:,} >= total, using all files)")
         else:
-            print(f"Found {total_files} audio files")
+            print(f"Found {total_files:,} audio files")
         
         self.meta: List[dict] = []
         self.resamplers = {}
         
-        print(f"Loading metadata for {files_after_filtering} files...")
+        print(f"Loading metadata for {files_after_filtering:,} files...")
         for audio_path in tqdm(audio_files, desc="Loading metadata", unit="file"):
             try:
                 info = torchaudio.info(str(audio_path), backend=self.backend)
@@ -124,8 +124,8 @@ class SimpleRawAudioDataset(Dataset):
         
         valid_files = len(self.meta)
         if valid_files < files_after_filtering:
-            print(f"Warning: {files_after_filtering - valid_files} files failed metadata loading")
-        print(f"Successfully loaded {valid_files} files, generating clips...")
+            print(f"Warning: {files_after_filtering - valid_files:,} files failed metadata loading")
+        print(f"Loaded {valid_files:,} files, generating clips...")
         
         self.index_map: List[Tuple[int, int, int, int, int]] = []
         
@@ -152,7 +152,7 @@ class SimpleRawAudioDataset(Dataset):
                 )
         
         total_clips = len(self.index_map)
-        print(f"Dataset initialized: {valid_files} files, {total_clips} clips (avg {total_clips/valid_files:.1f} clips/file)")
+        print(f"Dataset initialized: {valid_files:,} files, {total_clips:,} clips (avg {total_clips/valid_files:.1f} clips/file)")
     
     def __len__(self):
         return len(self.index_map)
