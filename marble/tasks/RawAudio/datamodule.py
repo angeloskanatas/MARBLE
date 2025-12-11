@@ -212,7 +212,11 @@ class SimpleRawAudioDataset(Dataset):
 class RawAudioDataModule(BaseDataModule):
     @staticmethod
     def _collate_fn(batch):
-        """Collate function that handles None targets."""
+        """Collate function that handles None targets and stacks waveforms.
+        
+        Required because SimpleRawAudioDataset returns (waveform, None, path),
+        and PyTorch's default_collate cannot handle None values.
+        """
         waveforms = [item[0] for item in batch]
         targets = [item[1] for item in batch]
         paths = [item[2] for item in batch]

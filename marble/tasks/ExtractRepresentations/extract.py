@@ -602,35 +602,41 @@ class ExtractRepresentationsTask(BaseTask):
             
             for batch in dataloader:
                 try:
+                    if isinstance(batch, list):
+                        batch = tuple(batch)
+                    
+                    if not isinstance(batch, tuple) or len(batch) < 2:
+                        raise ValueError(f"Expected batch tuple with at least 2 elements, got {type(batch)} with length {len(batch)}")
+                    
                     is_augmented = (
                         self.num_augmentations > 0
-                        and isinstance(batch, tuple)
                         and len(batch) > 1
-                        and isinstance(batch[0], tuple)
+                        and isinstance(batch[0], (tuple, list))
                         and len(batch[0]) >= 2
                     )
                     
                     if is_augmented:
-                        batches_to_process = batch
+                        batches_to_process = tuple(
+                            tuple(item) if isinstance(item, list) else item
+                            for item in batch
+                        )
                         aug_indices = [None] + list(range(self.num_augmentations))
                     else:
-                        if not isinstance(batch, tuple) or len(batch) < 2:
-                            raise ValueError(f"Expected batch tuple with at least 2 elements, got {type(batch)} with length {len(batch) if isinstance(batch, (tuple, list)) else 'N/A'}")
                         batches_to_process = (batch,)
                         aug_indices = [None]
                     
                     first_batch_item = batches_to_process[0]
                     if not isinstance(first_batch_item, tuple) or len(first_batch_item) < 2:
-                        raise ValueError(f"Expected batch item tuple with at least 2 elements, got {type(first_batch_item)} with length {len(first_batch_item) if isinstance(first_batch_item, (tuple, list)) else 'N/A'}")
+                        raise ValueError(f"Expected batch item tuple with at least 2 elements, got {type(first_batch_item)} with length {len(first_batch_item)}")
                     
                     first_waveform = first_batch_item[0]
-                    if isinstance(first_waveform, (list, tuple, np.ndarray)):
-                        first_waveform = torch.as_tensor(first_waveform)
-                        first_batch_item = (first_waveform,) + first_batch_item[1:]
-                        batches_to_process = (first_batch_item,) + batches_to_process[1:] if len(batches_to_process) > 1 else (first_batch_item,)
                     if not isinstance(first_waveform, torch.Tensor):
-                        shape_info = first_waveform.shape if hasattr(first_waveform, 'shape') else 'N/A'
-                        raise ValueError(f"Expected tensor, got {type(first_waveform)} with shape {shape_info}")
+                        if isinstance(first_waveform, (list, tuple, np.ndarray)):
+                            first_waveform = torch.as_tensor(first_waveform)
+                        else:
+                            shape_info = first_waveform.shape if hasattr(first_waveform, 'shape') else 'N/A'
+                            raise ValueError(f"Expected tensor, got {type(first_waveform)} with shape {shape_info}")
+                    
                     if first_waveform.ndim < 1:
                         raise ValueError(f"Expected tensor with at least 1 dimension, got {first_waveform.ndim} dimensions")
                     
@@ -644,6 +650,9 @@ class ExtractRepresentationsTask(BaseTask):
                     
                     for batch_item, aug_idx in zip(batches_to_process, aug_indices):
                         waveform = batch_item[0]
+                        if not isinstance(waveform, torch.Tensor):
+                            waveform = torch.as_tensor(waveform)
+                        
                         audio_paths = batch_item[2] if len(batch_item) > 2 else None
                         
                         if audio_paths is None:
@@ -702,7 +711,7 @@ class ExtractRepresentationsTask(BaseTask):
                         sample_count += samples_to_take
                         samples_saved += samples_to_take
                         pbar.update(samples_to_take)
-                    pbar.set_description(f"Extracting embeddings (batch {batch_count + 1}/{expected_batches}, saved: {samples_saved}/{total_samples})")
+                        pbar.set_description(f"Extracting embeddings (batch {batch_count + 1}/{expected_batches}, saved: {samples_saved}/{total_samples})")
                     batch_count += 1
                     
                 except (FileNotFoundError, OSError) as e:
