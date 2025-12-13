@@ -512,6 +512,7 @@ class ExtractRepresentationsTask(BaseTask):
         aug_idx: Optional[int] = None
     ) -> None:
         """Save sequence-level embeddings (B, H) to disk."""
+        # TODO: for 50-100k+ samples consider having a single .mmap file per layer?
         emb_type = f"sequence-level_aug{aug_idx}" if aug_idx is not None else "sequence-level"
         self._save_embeddings(
             sequence_embs, num_samples, audio_paths, batch_start_count,
