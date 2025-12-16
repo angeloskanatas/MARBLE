@@ -392,6 +392,8 @@ convert_HF/config.json
 # skip slurm files
 core.*
 __pycache__/
+*.out
+*.err
 
 wandb/
 lightning_logs/

@@ -41,8 +41,8 @@ model:
     extraction:
       split: test
       output_dir: /scratch/mtg/akanatas/output/extracted_embeddings/musicgen-small_mtg-jamendo/
-      max_samples: null
-      save_frame_level: true
+      max_samples: 5000
+      save_frame_level: false
       save_sequence_level: true
       
       augmentation:
@@ -78,8 +78,8 @@ model:
 data:
   class_path: marble.tasks.RawAudio.datamodule.RawAudioDataModule
   init_args:
-    batch_size: 8
-    num_workers: 8
+    batch_size: 32
+    num_workers: 16
 
     audio_transforms:
       train:
@@ -140,7 +140,7 @@ data:
         channel_mode: mix
         extensions: ['.wav', '.flac', '.mp3', '.webm', '.mp4']
         recursive: true
-        max_files: null
+        max_files: 1000
         random_seed: 42
         backend: "soundfile"
 

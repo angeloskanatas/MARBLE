@@ -3,9 +3,9 @@
 #SBATCH --partition=medium
 #SBATCH --nodes=1
 #SBATCH --ntasks=1
-#SBATCH --cpus-per-task=12
+#SBATCH --cpus-per-task=24
 #SBATCH --gres=gpu:tesla:1
-#SBATCH --mem=32G
+#SBATCH --mem=64G
 #SBATCH --time=04:00:00
 #SBATCH --chdir=/home/akanatas/MARBLE
 #SBATCH --output=%x-%j.out
