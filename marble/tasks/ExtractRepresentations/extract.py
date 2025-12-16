@@ -53,6 +53,7 @@ class ExtractRepresentationsTask(BaseTask):
                 - output_dir: Directory to save .npy files
                 - max_samples: Optional max number of samples to extract (none = all)
                 - subset_fraction: Optional fraction of dataset to use (0.0-1.0)
+                - sampling_seed: Random seed for deterministic sample selection (default: 17)
                 - save_frame_level: Whether to save frame-level embeddings (default: True)
                 - save_sequence_level: Whether to save sequence-level embeddings (default: True)
             use_ema: Whether to use EMA (not used for extraction, kept for compatibility)
@@ -118,6 +119,8 @@ class ExtractRepresentationsTask(BaseTask):
         
         if self.max_samples is not None and self.subset_fraction is not None:
             raise ValueError("Cannot specify both max_samples and subset_fraction")
+        
+        self.sampling_seed = extraction.get('sampling_seed', 17)
         
         self.save_frame_level = extraction.get('save_frame_level', True)
         self.save_sequence_level = extraction.get('save_sequence_level', True)
@@ -552,13 +555,18 @@ class ExtractRepresentationsTask(BaseTask):
         subset_indices = None
         
         if self.max_samples is not None and self.max_samples < original_total_samples:
-            subset_indices = list(range(self.max_samples))
+            rng = random.Random(self.sampling_seed)
+            subset_indices = sorted(rng.sample(range(original_total_samples), self.max_samples))
             total_samples = self.max_samples
         elif self.subset_fraction is not None:
             subset_size = int(original_total_samples * self.subset_fraction)
             if subset_size == 0:
-                raise ValueError(f"subset_fraction {self.subset_fraction} results in 0 samples from {original_total_samples} total")
-            subset_indices = list(range(subset_size))
+                raise ValueError(
+                    f"subset_fraction {self.subset_fraction} results in 0 samples "
+                    f"from {original_total_samples} total"
+                )
+            rng = random.Random(self.sampling_seed)
+            subset_indices = sorted(rng.sample(range(original_total_samples), subset_size))
             total_samples = subset_size
         
         if subset_indices is not None:

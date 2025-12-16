@@ -41,6 +41,7 @@ model:
       split: test
       output_dir: /scratch/mtg/akanatas/output/extracted_embeddings/musicfm_mtg-jamendo/
       max_samples: 5000
+      sampling_seed: 17
       save_frame_level: false
       save_sequence_level: true
       
