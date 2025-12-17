@@ -17,7 +17,9 @@ trainer:
   logger:
     class_path: lightning.pytorch.loggers.CSVLogger
     init_args:
-      save_dir: "/scratch/mtg/akanatas/output/extracted_embeddings/mert-330M_mtg-jamendo/"
+      # save_dir: "/scratch/mtg/akanatas/output/extracted_embeddings/mert-330M_mtg-jamendo/"
+      save_dir: "/gpfs/projects/mtg/projects/layerbylayer/output/extracted_embeddings/mert-330M_mtg-jamendo/"
+      # save_dir: "/home/akanatas/output/extracted_embeddings/mert-330M_mtg-jamendo/"
 
 model:
   class_path: marble.tasks.ExtractRepresentations.extract.ExtractRepresentationsTask
@@ -41,8 +43,10 @@ model:
     
     extraction:
       split: test
-      output_dir: /scratch/mtg/akanatas/output/extracted_embeddings/mert-330M_mtg-jamendo/
-      max_samples: 5000
+      # output_dir: /scratch/mtg/akanatas/output/extracted_embeddings/mert-330M_mtg-jamendo/
+      output_dir: /gpfs/projects/mtg/projects/layerbylayer/output/extracted_embeddings/mert-330M_mtg-jamendo/
+      # output_dir: /home/akanatas/output/extracted_embeddings/mert-330M_mtg-jamendo/
+      max_samples: 10000
       sampling_seed: 17
       save_frame_level: false
       save_sequence_level: true
@@ -132,6 +136,7 @@ data:
       class_path: marble.tasks.RawAudio.datamodule.SimpleRawAudioDataset
       init_args:
         audio_dir: /gpfs/projects/mtg/audio/stable/mtg-jamendo/raw_30s/audio
+        # audio_dir: /mnt/mtg/audio/stable/mtg-jamendo/raw_30s/audio
         sample_rate: 24000
         channels: 1
         clip_seconds: 15.0

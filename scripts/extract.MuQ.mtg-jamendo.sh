@@ -1,5 +1,5 @@
 #!/bin/bash
-#SBATCH --job-name=extract-muq-mtgjamendo
+#SBATCH --job-name=extract_muq_mtg-jamendo
 #SBATCH --partition=medium
 #SBATCH --nodes=1
 #SBATCH --ntasks=1

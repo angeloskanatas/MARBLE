@@ -3,6 +3,7 @@ from pathlib import Path
 from typing import Dict, Tuple, Optional
 from functools import partial
 import hashlib
+import json
 import random
 import numpy as np
 import torch
@@ -25,14 +26,11 @@ MAX_AUDIO_CHANNELS = 16
 
 
 class ExtractRepresentationsTask(BaseTask):
-    """
-    Extracts frame-level and sequence-level embeddings using MARBLE's encoder and emb_transforms pipeline.
+    """Extracts frame-level and sequence-level embeddings.
     
-    Saves embeddings as per-file .npy files organized by layer and type:
-    - output_dir/layer{idx}/frame-level/{file_id}.npy  (shape: T, H)
-    - output_dir/layer{idx}/sequence-level/{file_id}.npy  (shape: H)
-    
-    Processes batches for efficiency but saves per-file to minimize memory usage.
+    Saves:
+    - Frame-level: per-file .npy (shape: T, H)
+    - Sequence-level: single .dat memmap per layer (shape: N, H)
     """
 
     def __init__(
@@ -50,12 +48,13 @@ class ExtractRepresentationsTask(BaseTask):
             emb_transforms: List of embedding transform configs
             extraction: Extraction config dict with keys:
                 - split: "train", "val", or "test"
-                - output_dir: Directory to save .npy files
+                - output_dir: Directory to save embeddings
                 - max_samples: Optional max number of samples to extract (none = all)
                 - subset_fraction: Optional fraction of dataset to use (0.0-1.0)
                 - sampling_seed: Random seed for deterministic sample selection (default: 17)
                 - save_frame_level: Whether to save frame-level embeddings (default: True)
                 - save_sequence_level: Whether to save sequence-level embeddings (default: True)
+                - memmap_flush_interval: Flush memmap files every N batches (default: 100)
             use_ema: Whether to use EMA (not used for extraction, kept for compatibility)
         """
         enc = instantiate_from_config(encoder)
@@ -145,6 +144,9 @@ class ExtractRepresentationsTask(BaseTask):
         
         self._num_samples_processed = 0
         self._layer_dirs_cache = {}
+        self._sequence_memmaps = {}
+        self._sequence_sample_idx = {}
+        self._memmap_flush_interval = extraction.get('memmap_flush_interval', 100)
 
     def _build_augmentation_pipeline(self, config: dict, sample_rate: int) -> Optional['audiomentations.Compose']:
         """Build audiomentations pipeline from config.
@@ -506,6 +508,32 @@ class ExtractRepresentationsTask(BaseTask):
             emb_type="frame-level", aug_idx=None
         )
     
+    def _init_sequence_memmap(
+        self,
+        layer_idx: int,
+        total_samples: int,
+        hidden_dim: int,
+        dtype: np.dtype,
+        aug_idx: Optional[int] = None
+    ) -> None:
+        key = (layer_idx, aug_idx)
+        if key in self._sequence_memmaps:
+            return
+        
+        emb_type = f"sequence-level_aug{aug_idx}" if aug_idx is not None else "sequence-level"
+        layer_dir = self._get_layer_dir(layer_idx, emb_type)
+        
+        memmap_file = layer_dir / "embeddings.dat"
+        memmap = np.memmap(
+            memmap_file,
+            dtype=dtype,
+            mode='w+',
+            shape=(total_samples, hidden_dim)
+        )
+        
+        self._sequence_memmaps[key] = memmap
+        self._sequence_sample_idx[key] = 0
+    
     def _save_sequence_level_embeddings(
         self,
         sequence_embs: Dict[int, torch.Tensor],
@@ -514,21 +542,85 @@ class ExtractRepresentationsTask(BaseTask):
         batch_start_count: int,
         aug_idx: Optional[int] = None
     ) -> None:
-        """Save sequence-level embeddings (B, H) to disk."""
-        # TODO: for 50-100k+ samples consider having a single .mmap file per layer?
-        emb_type = f"sequence-level_aug{aug_idx}" if aug_idx is not None else "sequence-level"
-        self._save_embeddings(
-            sequence_embs, num_samples, audio_paths, batch_start_count,
-            emb_type=emb_type, aug_idx=aug_idx
-        )
+        embeddings_cpu = {
+            layer_idx: emb[:num_samples].detach().cpu().numpy()
+            for layer_idx, emb in sequence_embs.items()
+        }
+        self._write_sequence_embeddings_to_memmap(embeddings_cpu, num_samples, aug_idx)
+    
+    def _write_sequence_embeddings_to_memmap(
+        self,
+        embeddings_cpu: Dict[int, np.ndarray],
+        num_samples: int,
+        aug_idx: Optional[int] = None
+    ) -> None:
+        for layer_idx, batch_emb in embeddings_cpu.items():
+            key = (layer_idx, aug_idx)
+            
+            if key not in self._sequence_memmaps:
+                total_samples = self._get_total_samples_for_memmap()
+                H = batch_emb.shape[1]
+                dtype = batch_emb.dtype
+                self._init_sequence_memmap(layer_idx, total_samples, H, dtype, aug_idx)
+            
+            memmap = self._sequence_memmaps[key]
+            sample_idx = self._sequence_sample_idx[key]
+            
+            if sample_idx + num_samples > memmap.shape[0]:
+                raise ValueError(
+                    f"Memmap bounds exceeded for layer {layer_idx}, aug {aug_idx}: "
+                    f"trying to write {num_samples} samples at index {sample_idx}, "
+                    f"but memmap only has {memmap.shape[0]} samples"
+                )
+            
+            memmap[sample_idx:sample_idx + num_samples] = batch_emb
+            self._sequence_sample_idx[key] = sample_idx + num_samples
+    
+    def _get_total_samples_for_memmap(self) -> int:
+        if hasattr(self, '_total_samples_for_memmap'):
+            return self._total_samples_for_memmap
+        raise RuntimeError("Total samples not set for memmap initialization")
+    
+    def _flush_sequence_memmaps(self) -> None:
+        for memmap in self._sequence_memmaps.values():
+            memmap.flush()
+    
+    def _close_sequence_memmaps(self) -> None:
+        for (layer_idx, aug_idx), memmap in self._sequence_memmaps.items():
+            memmap.flush()
+            
+            actual_samples_written = self._sequence_sample_idx.get((layer_idx, aug_idx), 0)
+            
+            emb_type = f"sequence-level_aug{aug_idx}" if aug_idx is not None else "sequence-level"
+            layer_dir = self._get_layer_dir(layer_idx, emb_type)
+            metadata_file = layer_dir / "metadata.json"
+            memmap_file = layer_dir / "embeddings.dat"
+            
+            actual_shape = (actual_samples_written, memmap.shape[1])
+            file_size = memmap_file.stat().st_size
+            itemsize = memmap.dtype.itemsize
+            
+            metadata = {
+                'shape': list(actual_shape),
+                'dtype': str(memmap.dtype),
+                'format': 'memmap',
+                'aug_idx': aug_idx,
+                'allocated_shape': list(memmap.shape),
+                'file_size_bytes': file_size,
+                'itemsize_bytes': itemsize
+            }
+            
+            with open(metadata_file, 'w') as f:
+                json.dump(metadata, f, indent=2)
+        
+        self._sequence_memmaps.clear()
+        self._sequence_sample_idx.clear()
     
     def test_step(self, batch, batch_idx: int) -> dict:
-        """Not used - extraction happens in on_test_start()."""
         return {}
     
     @rank_zero_only
     def on_test_start(self) -> None:
-        """Extract embeddings by manually iterating through the dataloader, saving per-file."""
         self._num_samples_processed = 0
         
         if self.trainer is None or self.trainer.datamodule is None:
@@ -610,7 +702,13 @@ class ExtractRepresentationsTask(BaseTask):
         
         self.eval()
         self._layer_dirs_cache.clear()
+        self._sequence_memmaps.clear()
+        self._sequence_sample_idx.clear()
+        self._total_samples_for_memmap = total_samples
         warned_frame_level = False
+        
+        # TODO: For DDP/multi-GPU extraction, use per-rank files (embeddings_rank{rank}.dat)
+        # and merge after extraction?
         
         with torch.no_grad():
             sample_count = 0
@@ -618,134 +716,163 @@ class ExtractRepresentationsTask(BaseTask):
             batch_count = 0
             pbar = tqdm(total=total_samples, desc="Extracting embeddings", unit="sample")
             
-            for batch in dataloader:
-                try:
-                    if isinstance(batch, list):
-                        batch = tuple(batch)
-                    
-                    if not isinstance(batch, tuple) or len(batch) < 2:
-                        raise ValueError(f"Expected batch tuple with at least 2 elements, got {type(batch)} with length {len(batch)}")
-                    
-                    is_augmented = (
-                        self.num_augmentations > 0
-                        and len(batch) > 1
-                        and isinstance(batch[0], (tuple, list))
-                        and len(batch[0]) >= 2
-                    )
-                    
-                    if is_augmented:
-                        batches_to_process = tuple(
-                            tuple(item) if isinstance(item, list) else item
-                            for item in batch
+            try:
+                for batch in dataloader:
+                    try:
+                        if isinstance(batch, list):
+                            batch = tuple(batch)
+                        
+                        if not isinstance(batch, tuple) or len(batch) < 2:
+                            raise ValueError(f"Expected batch tuple with at least 2 elements, got {type(batch)} with length {len(batch)}")
+                        
+                        is_augmented = (
+                            self.num_augmentations > 0
+                            and len(batch) > 1
+                            and isinstance(batch[0], (tuple, list))
+                            and len(batch[0]) >= 2
                         )
-                        aug_indices = [None] + list(range(self.num_augmentations))
-                    else:
-                        batches_to_process = (batch,)
-                        aug_indices = [None]
-                    
-                    first_batch_item = batches_to_process[0]
-                    if not isinstance(first_batch_item, tuple) or len(first_batch_item) < 2:
-                        raise ValueError(f"Expected batch item tuple with at least 2 elements, got {type(first_batch_item)} with length {len(first_batch_item)}")
-                    
-                    first_waveform = first_batch_item[0]
-                    if not isinstance(first_waveform, torch.Tensor):
-                        if isinstance(first_waveform, (list, tuple, np.ndarray)):
-                            first_waveform = torch.as_tensor(first_waveform)
-                        else:
-                            shape_info = first_waveform.shape if hasattr(first_waveform, 'shape') else 'N/A'
-                            raise ValueError(f"Expected tensor, got {type(first_waveform)} with shape {shape_info}")
-                    
-                    if first_waveform.ndim < 1:
-                        raise ValueError(f"Expected tensor with at least 1 dimension, got {first_waveform.ndim} dimensions")
-                    
-                    batch_size_actual = first_waveform.shape[0]
-                    if batch_size_actual == 0:
-                        raise ValueError("Batch size is 0")
-                    
-                    samples_to_take = batch_size_actual
-                    frame_embs = None
-                    processed_any = False
-                    
-                    for batch_item, aug_idx in zip(batches_to_process, aug_indices):
-                        waveform = batch_item[0]
-                        if not isinstance(waveform, torch.Tensor):
-                            waveform = torch.as_tensor(waveform)
                         
-                        audio_paths = batch_item[2] if len(batch_item) > 2 else None
-                        
-                        if audio_paths is None:
-                            raise ValueError("Batch must contain audio paths (batch[2]) for per-file saving")
-                        
-                        if waveform.device.type != self.device.type:
-                            waveform = waveform.to(self.device)
-                        
-                        if not isinstance(audio_paths, (list, tuple)):
-                            audio_paths = [str(audio_paths)] * batch_size_actual
-                        elif len(audio_paths) != batch_size_actual:
-                            raise ValueError(f"audio_paths length ({len(audio_paths)}) doesn't match batch_size ({batch_size_actual})")
-                        
-                        try:
-                            encoder_output = self.encoder(waveform)
-                        except RuntimeError as e:
-                            error_msg = str(e).lower()
-                            is_oom = (
-                                'out of memory' in error_msg or 
-                                'cuda' in error_msg or 
-                                'mps' in error_msg
+                        if is_augmented:
+                            batches_to_process = tuple(
+                                tuple(item) if isinstance(item, list) else item
+                                for item in batch
                             )
-                            if is_oom:
-                                print(f"OOM error in batch {batch_count + 1}: {e}. Skipping {batch_size_actual} samples.")
+                            aug_indices = [None] + list(range(self.num_augmentations))
+                        else:
+                            batches_to_process = (batch,)
+                            aug_indices = [None]
+                        
+                        first_batch_item = batches_to_process[0]
+                        if not isinstance(first_batch_item, tuple) or len(first_batch_item) < 2:
+                            raise ValueError(f"Expected batch item tuple with at least 2 elements, got {type(first_batch_item)} with length {len(first_batch_item)}")
+                        
+                        first_waveform = first_batch_item[0]
+                        if not isinstance(first_waveform, torch.Tensor):
+                            if isinstance(first_waveform, (list, tuple, np.ndarray)):
+                                first_waveform = torch.as_tensor(first_waveform)
+                            else:
+                                raise ValueError(f"Expected tensor, got {type(first_waveform)}")
+                        
+                        if first_waveform.ndim < 1:
+                            raise ValueError(f"Expected tensor with at least 1 dimension, got {first_waveform.ndim} dimensions")
+                        
+                        batch_size_actual = first_waveform.shape[0]
+                        if batch_size_actual == 0:
+                            raise ValueError("Batch size is 0")
+                        
+                        samples_to_take = batch_size_actual
+                        frame_embs = None
+                        base_audio_paths = None
+                        views_succeeded = 0
+                        pending_embeddings = {}
+                        
+                        for batch_item, aug_idx in zip(batches_to_process, aug_indices):
+                            waveform = batch_item[0]
+                            if not isinstance(waveform, torch.Tensor):
+                                waveform = torch.as_tensor(waveform)
+                            
+                            audio_paths = batch_item[2] if len(batch_item) > 2 else None
+                            
+                            if audio_paths is None:
+                                raise ValueError("Batch must contain audio paths (batch[2]) for per-file saving")
+                            
+                            if waveform.device.type != self.device.type:
+                                waveform = waveform.to(self.device)
+                            
+                            if not isinstance(audio_paths, (list, tuple)):
+                                audio_paths = [str(audio_paths)] * batch_size_actual
+                            elif len(audio_paths) != batch_size_actual:
+                                raise ValueError(f"audio_paths length ({len(audio_paths)}) doesn't match batch_size ({batch_size_actual})")
+                            
+                            if aug_idx is None:
+                                base_audio_paths = audio_paths
+                            
+                            try:
+                                encoder_output = self.encoder(waveform)
+                            except RuntimeError as e:
+                                error_msg = str(e).lower()
+                                is_oom = (
+                                    'out of memory' in error_msg or 
+                                    'cuda' in error_msg or 
+                                    'mps' in error_msg
+                                )
+                                if is_oom:
+                                    print(f"OOM error in batch {batch_count + 1}, aug {aug_idx}: {e}. Skipping entire batch.")
                                 if torch.cuda.is_available():
                                     torch.cuda.empty_cache()
                                 elif hasattr(torch.backends, 'mps') and torch.backends.mps.is_available():
                                     torch.mps.empty_cache()
-                            else:
-                                print(f"Error in batch {batch_count + 1}: {e}. Skipping {batch_size_actual} samples.")
-                            continue
-                        
-                        processed_any = True
-                        
-                        if aug_idx is None and self.save_frame_level:
-                            frame_embs = self._get_frame_level_embeddings(encoder_output)
-                            if not frame_embs and not warned_frame_level:
-                                print("Warning: Model returns already-pooled embeddings. Skipping frame-level extraction.")
-                                warned_frame_level = True
-                            elif frame_embs:
-                                self._save_frame_level_embeddings(
-                                    frame_embs, samples_to_take, audio_paths, sample_count
-                                )
-                        
-                        if self.save_sequence_level:
-                            if aug_idx is None and frame_embs is not None:
-                                sequence_embs = self._pool_frame_embeddings(frame_embs)
-                            else:
-                                sequence_embs = self._get_sequence_level_embeddings(encoder_output)
+                                else:
+                                    print(f"Error in batch {batch_count + 1}, aug {aug_idx}: {e}. Skipping entire batch.")
+                                break
                             
-                            if sequence_embs:
-                                self._save_sequence_level_embeddings(
-                                    sequence_embs, samples_to_take, audio_paths,
-                                    sample_count, aug_idx=aug_idx
-                                )
+                            views_succeeded += 1
+                            
+                            if aug_idx is None and self.save_frame_level:
+                                frame_embs = self._get_frame_level_embeddings(encoder_output)
+                                if not frame_embs and not warned_frame_level:
+                                    print("Warning: Model returns already-pooled embeddings. Skipping frame-level extraction.")
+                                    warned_frame_level = True
+                            
+                            if self.save_sequence_level:
+                                if aug_idx is None and frame_embs is not None:
+                                    sequence_embs = self._pool_frame_embeddings(frame_embs)
+                                else:
+                                    sequence_embs = self._get_sequence_level_embeddings(encoder_output)
+                                
+                                if sequence_embs:
+                                    pending_embeddings[aug_idx] = {
+                                        layer_idx: emb[:samples_to_take].detach().cpu().numpy()
+                                        for layer_idx, emb in sequence_embs.items()
+                                    }
+                            
+                            encoder_output = None
                         
-                        encoder_output = None
+                        all_views_ok = (views_succeeded == len(aug_indices))
+                        all_seq_ok = (not self.save_sequence_level) or (len(pending_embeddings) == len(aug_indices))
+                        
+                        if all_views_ok and all_seq_ok:
+                            if self.save_frame_level and frame_embs:
+                                if base_audio_paths is None:
+                                    raise ValueError("base_audio_paths is None but frame-level saving is enabled")
+                                self._save_frame_level_embeddings(
+                                    frame_embs, samples_to_take, base_audio_paths, sample_count
+                                )
+                            
+                            if self.save_sequence_level:
+                                for aug_idx in aug_indices:
+                                    if aug_idx in pending_embeddings:
+                                        sequence_embs_np = pending_embeddings[aug_idx]
+                                        self._write_sequence_embeddings_to_memmap(
+                                            sequence_embs_np, samples_to_take, aug_idx
+                                        )
+                            
+                            sample_count += samples_to_take
+                            samples_saved += samples_to_take
+                            pbar.update(samples_to_take)
+                            pbar.set_description(f"Extracting embeddings (batch {batch_count + 1}/{expected_batches}, saved: {samples_saved}/{total_samples})")
+                            
+                            if (batch_count + 1) % self._memmap_flush_interval == 0:
+                                self._flush_sequence_memmaps()
+                        elif all_views_ok and not all_seq_ok:
+                            print(f"Warning: Batch {batch_count + 1} - all views succeeded but sequence embeddings missing for some views. Skipping batch.")
+                        
+                        batch_count += 1
                     
-                    if processed_any:
-                        sample_count += samples_to_take
-                        samples_saved += samples_to_take
-                        pbar.update(samples_to_take)
-                        pbar.set_description(f"Extracting embeddings (batch {batch_count + 1}/{expected_batches}, saved: {samples_saved}/{total_samples})")
-                    batch_count += 1
-                    
-                except (FileNotFoundError, OSError) as e:
-                    print(f"Error loading batch {batch_count + 1}/{expected_batches}: {e}. Skipping.")
-                    batch_count += 1
-                    continue
-                except (ValueError, RuntimeError) as e:
-                    print(f"Error processing batch {batch_count + 1}/{expected_batches}: {e}. Skipping.")
-                    batch_count += 1
-                    continue
+                    except (FileNotFoundError, OSError) as e:
+                        print(f"Error loading batch {batch_count + 1}/{expected_batches}: {e}. Skipping.")
+                        batch_count += 1
+                        continue
+                    except (ValueError, RuntimeError) as e:
+                        print(f"Error processing batch {batch_count + 1}/{expected_batches}: {e}. Skipping.")
+                        batch_count += 1
+                        continue
+            finally:
+                pbar.close()
+                
+                self._flush_sequence_memmaps()
+                self._close_sequence_memmaps()
             
-            pbar.close()
             print(f"\nExtraction complete: {samples_saved:,}/{total_samples:,} samples saved")
             if sample_count > samples_saved:
                 print(f"Skipped {sample_count - samples_saved:,} samples due to errors")
@@ -754,5 +881,4 @@ class ExtractRepresentationsTask(BaseTask):
 
     @rank_zero_only
     def on_test_epoch_end(self) -> None:
-        """Print extraction summary."""
         print(f"Output: {self.output_dir}")

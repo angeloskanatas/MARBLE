@@ -1,5 +1,5 @@
 #!/bin/bash
-#SBATCH --job-name=extract-mert-95m-mtgjamendo
+#SBATCH --job-name=extract_mert-95M_mtg-jamendo
 #SBATCH --partition=medium
 #SBATCH --nodes=1
 #SBATCH --ntasks=1

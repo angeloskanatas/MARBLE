@@ -1,5 +1,5 @@
 #!/bin/bash
-#SBATCH --job-name=extract-musicgen-small-mtgjamendo
+#SBATCH --job-name=extract_musicgen-small_mtg-jamendo
 #SBATCH --partition=medium
 #SBATCH --nodes=1
 #SBATCH --ntasks=1
