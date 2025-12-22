@@ -9,6 +9,7 @@ import torchaudio
 import torch.nn.functional as F
 from torch.utils.data import Dataset, DataLoader
 from tqdm import tqdm
+import soundfile as sf
 
 from marble.core.base_datamodule import BaseDataModule
 from marble.utils.utils import list_audio_files
@@ -18,7 +19,7 @@ class SimpleRawAudioDataset(Dataset):
     """
     Simple dataset for raw audio files without JSONL metadata.
     
-    Scans directory for audio files and builds metadata on-the-fly using torchaudio.info().
+    Scans directory for audio files and builds metadata on-the-fly.
     Splits each audio file into non-overlapping clips of length `clip_seconds` (last clip zero-padded).
     
     Returns (waveform, None, path) for extraction tasks.
@@ -100,10 +101,10 @@ class SimpleRawAudioDataset(Dataset):
         print(f"Loading metadata for {files_after_filtering:,} files...")
         for audio_path in tqdm(audio_files, desc="Loading metadata", unit="file"):
             try:
-                info = torchaudio.info(str(audio_path), backend=self.backend)
-                orig_sr = info.sample_rate
-                num_samples = info.num_frames
-                num_channels = info.num_channels
+                with sf.SoundFile(str(audio_path)) as f:
+                    orig_sr = f.samplerate
+                    num_samples = f.frames
+                    num_channels = f.channels
                 
                 self.meta.append({
                     "audio_path": str(audio_path),
@@ -175,8 +176,7 @@ class SimpleRawAudioDataset(Dataset):
             waveform, _ = torchaudio.load(
                 path,
                 frame_offset=offset,
-                num_frames=orig_clip,
-                backend=self.backend
+                num_frames=orig_clip
             )
         except (OSError, RuntimeError) as e:
             raise RuntimeError(f"Failed to load audio file '{path}': {e}") from e

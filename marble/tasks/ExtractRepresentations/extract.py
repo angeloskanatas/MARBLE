@@ -664,15 +664,17 @@ class ExtractRepresentationsTask(BaseTask):
         if subset_indices is not None:
             dataset = Subset(dataset, subset_indices)
         
-        dataloader = DataLoader(
-            dataset,
-            batch_size=datamodule.batch_size,
-            shuffle=False,
-            num_workers=datamodule.num_workers,
-            pin_memory=True,
-            prefetch_factor=2,
-            collate_fn=collate_fn,
-        )
+        loader_kwargs = {
+            "batch_size": datamodule.batch_size,
+            "shuffle": False,
+            "num_workers": datamodule.num_workers,
+            "pin_memory": True,
+            "collate_fn": collate_fn,
+        }
+        if datamodule.num_workers > 0:
+            loader_kwargs["prefetch_factor"] = 2
+            loader_kwargs["persistent_workers"] = True
+        dataloader = DataLoader(dataset, **loader_kwargs)
         
         batch_size = getattr(dataloader, 'batch_size', None)
         if batch_size is None:
