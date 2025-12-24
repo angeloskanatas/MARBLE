@@ -19,9 +19,9 @@ trainer:
   logger:
     class_path: lightning.pytorch.loggers.CSVLogger
     init_args:
-      save_dir: "/scratch/mtg/akanatas/projects/layerbylayer/output/extracted_embeddings/musicfm_mtg-jamendo/"
-      # save_dir: "/gpfs/projects/mtg/projects/layerbylayer/output/extracted_embeddings/musicfm_mtg-jamendo/"
-      # save_dir: "/home/akanatas/output/extracted_embeddings/musicfm_mtg-jamendo/"
+      save_dir: "/scratch/mtg/akanatas/projects/layerbylayer/output/extracted_embeddings/mert-330M_discotube/"
+      # save_dir: "/gpfs/projects/mtg/projects/layerbylayer/output/extracted_embeddings/mert-330M_discotube/"
+      # save_dir: "/home/akanatas/output/extracted_embeddings/mert-330M_discotube/"
 
 model:
   class_path: marble.tasks.ExtractRepresentations.extract.ExtractRepresentationsTask
@@ -30,10 +30,12 @@ model:
     use_ema: false
 
     encoder:
-      class_path: marble.encoders.MusicFM.model.MusicFM_Encoder
+      class_path: marble.encoders.MERT.model.MERT_v1_330M_Encoder
       init_args:
         pre_trained_folder: null
         train_mode: freeze  # just inference
+        force_half: false
+        preprocess_in_forward: false
       
     emb_transforms:
       - class_path: marble.modules.transforms.LayerSelector
@@ -43,9 +45,9 @@ model:
     
     extraction:
       split: test  # options: train, val, test
-      output_dir: /scratch/mtg/akanatas/projects/layerbylayer/output/extracted_embeddings/musicfm_mtg-jamendo/
-      # output_dir: /gpfs/projects/mtg/projects/layerbylayer/output/extracted_embeddings/musicfm_mtg-jamendo/
-      # output_dir: /home/akanatas/output/extracted_embeddings/musicfm_mtg-jamendo/
+      output_dir: /scratch/mtg/akanatas/projects/layerbylayer/output/extracted_embeddings/mert-330M_discotube/
+      # output_dir: /gpfs/projects/mtg/projects/layerbylayer/output/extracted_embeddings/mert-330M_discotube/
+      # output_dir: /home/akanatas/output/extracted_embeddings/mert-330M_discotube/
       max_samples: 10000  # null = all samples, or set to limit samples processed
       # subset_fraction: 0.1  # alternative to max_samples
       sampling_seed: 17
@@ -90,18 +92,34 @@ data:
     batch_size: 32
     num_workers: 16
 
+    audio_transforms:
+      train:
+        - class_path: marble.encoders.MERT.model.MERT_v1_330M_FeatureExtractor
+          init_args:
+            pre_trained_folder: null
+            squeeze: true
+      val:
+        - class_path: marble.encoders.MERT.model.MERT_v1_330M_FeatureExtractor
+          init_args:
+            pre_trained_folder: null
+            squeeze: true
+      test:
+        - class_path: marble.encoders.MERT.model.MERT_v1_330M_FeatureExtractor
+          init_args:
+            pre_trained_folder: null
+            squeeze: true
+
     train:
       class_path: marble.tasks.RawAudio.datamodule.SimpleRawAudioDataset
       init_args:
-        audio_dir: /gpfs/projects/mtg/audio/stable/mtg-jamendo/raw_30s/audio
-        # audio_dir: /mnt/mtg/audio/stable/mtg-jamendo/raw_30s/audio
+        # audio_dir:  # use audio_dir for directory scanning mode
+        # jsonl: /gpfs/projects/mtg/projects/discotube/discotube_balanced_ids.jsonl
+        jsonl: /home/akanatas/discotube_balanced_ids.jsonl
         sample_rate: 24000
         channels: 1
         clip_seconds: 15.0
         min_clip_ratio: 0.8  # at least 80% of the clip length
         channel_mode: mix  # first, random, mix
-        extensions: ['.wav', '.flac', '.mp3', '.webm', '.mp4']  # optional: specify file extensions
-        recursive: true  # optional: search recursively in subdirectories
         max_files: null  # null = all files
         random_seed: 42
         backend: "soundfile"
@@ -109,15 +127,14 @@ data:
     val:
       class_path: marble.tasks.RawAudio.datamodule.SimpleRawAudioDataset
       init_args:
-        audio_dir: /gpfs/projects/mtg/audio/stable/mtg-jamendo/raw_30s/audio
-        # audio_dir: /mnt/mtg/audio/stable/mtg-jamendo/raw_30s/audio
+        # audio_dir:  # use audio_dir for directory scanning mode
+        # jsonl: /gpfs/projects/mtg/projects/discotube/discotube_balanced_ids.jsonl
+        jsonl: /home/akanatas/discotube_balanced_ids.jsonl
         sample_rate: 24000
         channels: 1
         clip_seconds: 15.0
         min_clip_ratio: 0.8  # at least 80% of the clip length
         channel_mode: mix  # first, random, mix
-        extensions: ['.wav', '.flac', '.mp3', '.webm', '.mp4']  # optional: specify file extensions
-        recursive: true  # optional: search recursively in subdirectories
         max_files: null  # null = all files
         random_seed: 42
         backend: "soundfile"
@@ -125,15 +142,14 @@ data:
     test:
       class_path: marble.tasks.RawAudio.datamodule.SimpleRawAudioDataset
       init_args:
-        audio_dir: /gpfs/projects/mtg/audio/stable/mtg-jamendo/raw_30s/audio
-        # audio_dir: /mnt/mtg/audio/stable/mtg-jamendo/raw_30s/audio
+        # audio_dir:  # use audio_dir for directory scanning mode
+        # jsonl: /gpfs/projects/mtg/projects/discotube/discotube_balanced_ids.jsonl
+        jsonl: /home/akanatas/discotube_balanced_ids.jsonl
         sample_rate: 24000
         channels: 1
         clip_seconds: 15.0
         min_clip_ratio: 0.8  # at least 80% of the clip length
         channel_mode: mix  # first, random, mix
-        extensions: ['.wav', '.flac', '.mp3', '.webm', '.mp4']  # optional: specify file extensions
-        recursive: true  # optional: search recursively in subdirectories
         max_files: 1000  # null = all files
         random_seed: 42
         backend: "soundfile"

@@ -1,5 +1,7 @@
 # marble/tasks/RawAudio/datamodule.py
 
+import json
+import subprocess
 from pathlib import Path
 from typing import List, Tuple, Optional
 import random
@@ -16,18 +18,18 @@ from marble.utils.utils import list_audio_files
 
 class SimpleRawAudioDataset(Dataset):
     """
-    Simple dataset for raw audio files without JSONL metadata.
+    Dataset for raw audio files used for extraction tasks.
     
-    Scans directory for audio files and builds metadata on-the-fly using torchaudio.info().
-    Splits each audio file into non-overlapping clips of length `clip_seconds` (last clip zero-padded).
-    
-    Returns (waveform, None, path) for extraction tasks.
+    Splits each audio file into non-overlapping clips of length `clip_seconds`.
+
+    Returns (waveform, None, path).
     """
     
     def __init__(
         self,
-        audio_dir: str,
-        sample_rate: int,
+        audio_dir: Optional[str] = None,
+        jsonl: Optional[str] = None,
+        sample_rate: int = 24000,
         channels: int = 1,
         clip_seconds: float = 15.0,
         channel_mode: str = "first",
@@ -40,7 +42,9 @@ class SimpleRawAudioDataset(Dataset):
     ):
         """
         Args:
-            audio_dir: Directory containing audio files to scan.
+            audio_dir: Directory containing audio files to scan (if jsonl is None).
+            jsonl: Path to JSONL file with audio metadata (if audio_dir is None).
+                   Each line: {"audio_path": "...", "sample_rate": ..., "num_samples": ..., "channels": ...}
             sample_rate: Target sample rate to which all audio will be resampled.
             channels: Desired number of output channels (e.g., 1 for mono, 2 for stereo).
             clip_seconds: Duration (in seconds) of each clip to slice from the audio.
@@ -48,84 +52,38 @@ class SimpleRawAudioDataset(Dataset):
                           Options: "first", "mix", "random".
             min_clip_ratio: Minimum fraction of a final (possibly partial) clip to keep.
             backend: torchaudio backend to use (e.g., "soundfile", "sox_io").
-            extensions: File extensions to consider as audio files.
-            recursive: If True, search recursively in subdirectories.
+            extensions: File extensions to consider as audio files (if audio_dir is specified).
+            recursive: If True, search recursively in subdirectories (if audio_dir is specified).
             max_files: Optional maximum number of files to process. If set, files are randomly
-                      sampled before metadata loading (much faster for large datasets).
-                      If None, processes all files.
-            random_seed: Random seed for file sampling when max_files is set. If None, uses
-                        system random (non-deterministic).
+                      sampled before metadata loading. If None, processes all files.
+            random_seed: Random seed for file sampling when max_files is set.
         """
+        if (audio_dir is None) == (jsonl is None):
+            raise ValueError(
+                "Must provide exactly one of: audio_dir or jsonl"
+            )
+        
         self.sample_rate = int(sample_rate)
         self.channels = channels
         self.channel_mode = channel_mode
+        if channel_mode not in ["first", "mix", "random"]:
+            raise ValueError(f"Unknown channel_mode: {channel_mode}")
         self.clip_seconds = clip_seconds
         self.clip_len_target = int(self.clip_seconds * self.sample_rate)
         self.min_clip_ratio = min_clip_ratio
         self.backend = backend
         
-        if self.channel_mode not in ["first", "mix", "random"]:
-            raise ValueError(f"Unknown channel_mode: {self.channel_mode}. Must be 'first', 'mix', or 'random'")
-        
-        audio_dir_path = Path(audio_dir)
-        if not audio_dir_path.exists():
-            raise ValueError(f"Audio directory not found: {audio_dir}")
-        
-        audio_files = list_audio_files(audio_dir_path, extensions=extensions, recursive=recursive)
-        if len(audio_files) == 0:
-            raise ValueError(f"No audio files found in {audio_dir}")
-        
-        total_files = len(audio_files)
-        files_after_filtering = total_files
-        
-        if max_files is not None:
-            if max_files <= 0:
-                raise ValueError(f"max_files must be positive, got {max_files}")
-            if max_files < total_files:
-                if random_seed is None:
-                    raise ValueError("random_seed must be provided when max_files is set to ensure deterministic file sampling")
-                rng = random.Random(random_seed)
-                audio_files = rng.sample(audio_files, max_files)
-                audio_files = sorted(audio_files)
-                files_after_filtering = len(audio_files)
-                print(f"Found {total_files:,} audio files, sampling {files_after_filtering:,} files (max_files={max_files:,}, seed={random_seed})")
-            else:
-                print(f"Found {total_files:,} audio files (max_files={max_files:,} >= total, using all files)")
+        if jsonl is not None:
+            self.meta, self.resamplers = self._load_from_jsonl(
+                jsonl, max_files, random_seed
+            )
         else:
-            print(f"Found {total_files:,} audio files")
-        
-        self.meta: List[dict] = []
-        self.resamplers = {}
-        
-        print(f"Loading metadata for {files_after_filtering:,} files...")
-        for audio_path in tqdm(audio_files, desc="Loading metadata", unit="file"):
-            try:
-                info = torchaudio.info(str(audio_path), backend=self.backend)
-                orig_sr = info.sample_rate
-                num_samples = info.num_frames
-                num_channels = info.num_channels
-                
-                self.meta.append({
-                    "audio_path": str(audio_path),
-                    "sample_rate": orig_sr,
-                    "num_samples": num_samples,
-                    "channels": num_channels
-                })
-                
-                if orig_sr != self.sample_rate and orig_sr not in self.resamplers:
-                    self.resamplers[orig_sr] = torchaudio.transforms.Resample(orig_sr, self.sample_rate)
-                    
-            except (OSError, RuntimeError) as e:
-                print(f"Warning: Skipping {audio_path} - {e}")
-                continue
+            self.meta, self.resamplers = self._load_from_directory(
+                audio_dir, extensions, recursive, max_files, random_seed
+            )
         
         if len(self.meta) == 0:
-            raise ValueError(f"No valid audio files found in {audio_dir}")
-        
-        valid_files = len(self.meta)
-        if valid_files < files_after_filtering:
-            print(f"Warning: {files_after_filtering - valid_files:,} files failed metadata loading")
-        print(f"Loaded {valid_files:,} files, generating clips...")
+            raise ValueError("No valid audio files found")
         
         self.index_map: List[Tuple[int, int, int, int, int]] = []
         
@@ -152,9 +110,251 @@ class SimpleRawAudioDataset(Dataset):
                 )
         
         total_clips = len(self.index_map)
-        print(f"Dataset initialized: {valid_files:,} files, {total_clips:,} clips (avg {total_clips/valid_files:.1f} clips/file)")
+        valid_files = len(self.meta)
+        print(
+            f"Dataset initialized: {valid_files:,} files, {total_clips:,} clips "
+            f"(avg {total_clips/valid_files:.1f} clips/file)"
+        )
     
-    def __len__(self):
+    def _load_from_jsonl(
+        self,
+        jsonl_path: str,
+        max_files: Optional[int],
+        random_seed: Optional[int],
+    ) -> Tuple[List[dict], dict]:
+        """Load audio metadata from JSONL file."""
+        jsonl_file = Path(jsonl_path)
+        if not jsonl_file.exists():
+            raise ValueError(f"JSONL file not found: {jsonl_path}")
+        
+        all_entries: List[dict] = []
+        with open(jsonl_file, 'r') as f:
+            for line in f:
+                if not line.strip():
+                    continue
+                try:
+                    entry = json.loads(line)
+                    if 'audio_path' not in entry:
+                        continue
+                    all_entries.append(entry)
+                except json.JSONDecodeError as e:
+                    print(f"Warning: Skipping invalid JSON line: {e}")
+                    continue
+        
+        total_files = len(all_entries)
+        if total_files == 0:
+            raise ValueError(f"No valid entries found in JSONL: {jsonl_path}")
+        
+        if max_files is not None:
+            if max_files <= 0:
+                raise ValueError(f"max_files must be positive, got {max_files}")
+            if max_files < total_files:
+                if random_seed is None:
+                    raise ValueError(
+                        "random_seed must be provided when max_files is set "
+                        "to ensure deterministic file sampling"
+                    )
+                rng = random.Random(random_seed)
+                selected_indices = sorted(rng.sample(range(total_files), max_files))
+                all_entries = [all_entries[i] for i in selected_indices]
+                print(
+                    f"Found {total_files:,} files in JSONL, sampling "
+                    f"{max_files:,} files "
+                    f"(max_files={max_files:,}, seed={random_seed})"
+                )
+            else:
+                print(
+                    f"Found {total_files:,} files in JSONL "
+                    f"(max_files={max_files:,} >= total, using all files)"
+                )
+        else:
+            print(f"Found {total_files:,} files in JSONL")
+        
+        meta: List[dict] = []
+        resamplers: dict = {}
+        
+        print(f"Loading metadata for {len(all_entries):,} files...")
+        for entry in tqdm(all_entries, desc="Loading metadata", unit="file"):
+            audio_path = entry.get('audio_path')
+            required_fields = ['sample_rate', 'num_samples', 'channels']
+            if not all(field in entry for field in required_fields):
+                print(
+                    f"Warning: Missing required fields in entry for {audio_path}, "
+                    f"skipping. Required: {required_fields}"
+                )
+                continue
+            
+            try:
+                entry['sample_rate'] = int(entry['sample_rate'])
+                entry['num_samples'] = int(entry['num_samples'])
+                entry['channels'] = int(entry['channels'])
+            except (ValueError, TypeError) as e:
+                print(
+                    f"Warning: Invalid field types in entry for {audio_path}, "
+                    f"skipping. Error: {e}"
+                )
+                continue
+            
+            meta.append(entry)
+            
+            orig_sr = entry['sample_rate']
+            if orig_sr != self.sample_rate and orig_sr not in resamplers:
+                resamplers[orig_sr] = torchaudio.transforms.Resample(
+                    orig_sr, self.sample_rate
+                )
+        
+        print(f"Loaded {len(meta):,} files, generating clips...")
+        return meta, resamplers
+    
+    def _get_audio_info_ffprobe(self, audio_path: str) -> dict:
+        """Get audio metadata using ffprobe."""
+        try:
+            cmd = [
+                "ffprobe", "-v", "error",
+                "-select_streams", "a:0",
+                "-show_entries", "stream=sample_rate,channels,duration,duration_ts,time_base",
+                "-show_entries", "format=duration",
+                "-of", "json",
+                str(audio_path),
+            ]
+            res = subprocess.run(cmd, capture_output=True, text=True, check=True)
+            j = json.loads(res.stdout)
+            
+            if not j.get("streams"):
+                raise RuntimeError("No audio stream a:0 found")
+            
+            s = j["streams"][0]
+            sample_rate = int(s["sample_rate"])
+            channels = int(s["channels"])
+            
+            duration_sec = None
+            if s.get("duration_ts") is not None and s.get("time_base"):
+                num, den = s["time_base"].split("/")
+                time_base = float(num) / float(den)
+                duration_sec = float(s["duration_ts"]) * time_base
+            elif s.get("duration") is not None:
+                duration_sec = float(s["duration"])
+            elif j.get("format", {}).get("duration") is not None:
+                duration_sec = float(j["format"]["duration"])
+            else:
+                raise RuntimeError("No duration available from ffprobe")
+            
+            num_samples = int(round(duration_sec * sample_rate))
+            
+            return {
+                "sample_rate": sample_rate,
+                "num_samples": num_samples,
+                "channels": channels,
+            }
+        except (subprocess.CalledProcessError, ValueError, KeyError, json.JSONDecodeError) as e:
+            raise RuntimeError(f"ffprobe failed for {audio_path}: {e}")
+    
+    def _get_audio_info_torchaudio(self, audio_path: str) -> dict:
+        """Get audio metadata using torchaudio (works for wav/flac/mp3)."""
+        try:
+            info = torchaudio.info(str(audio_path), backend=self.backend)
+            return {
+                "sample_rate": info.sample_rate,
+                "num_samples": info.num_frames,
+                "channels": info.num_channels,
+            }
+        except (OSError, RuntimeError) as e:
+            raise RuntimeError(f"torchaudio.info failed for {audio_path}: {e}")
+    
+    def _get_audio_info(self, audio_path: str) -> dict:
+        """Get audio metadata, using ffprobe for container formats, torchaudio for others."""
+        audio_path_lower = str(audio_path).lower()
+        
+        if audio_path_lower.endswith(('.mp4', '.webm')):
+            return self._get_audio_info_ffprobe(audio_path)
+        else:
+            return self._get_audio_info_torchaudio(audio_path)
+    
+    def _load_from_directory(
+        self,
+        audio_dir: str,
+        extensions: Tuple[str, ...],
+        recursive: bool,
+        max_files: Optional[int],
+        random_seed: Optional[int],
+    ) -> Tuple[List[dict], dict]:
+        """Load audio metadata by scanning directory."""
+        audio_dir_path = Path(audio_dir)
+        if not audio_dir_path.exists():
+            raise ValueError(f"Audio directory not found: {audio_dir}")
+        
+        audio_files = list_audio_files(
+            audio_dir_path, extensions=extensions, recursive=recursive
+        )
+        if len(audio_files) == 0:
+            raise ValueError(f"No audio files found in {audio_dir}")
+        
+        total_files = len(audio_files)
+        files_after_filtering = total_files
+        
+        if max_files is not None:
+            if max_files <= 0:
+                raise ValueError(f"max_files must be positive, got {max_files}")
+            if max_files < total_files:
+                if random_seed is None:
+                    raise ValueError(
+                        "random_seed must be provided when max_files is set "
+                        "to ensure deterministic file sampling"
+                    )
+                rng = random.Random(random_seed)
+                audio_files = rng.sample(audio_files, max_files)
+                audio_files = sorted(audio_files)
+                files_after_filtering = len(audio_files)
+                print(
+                    f"Found {total_files:,} audio files, sampling "
+                    f"{files_after_filtering:,} files "
+                    f"(max_files={max_files:,}, seed={random_seed})"
+                )
+            else:
+                print(
+                    f"Found {total_files:,} audio files "
+                    f"(max_files={max_files:,} >= total, using all files)"
+                )
+        else:
+            print(f"Found {total_files:,} audio files")
+        
+        meta: List[dict] = []
+        resamplers: dict = {}
+        
+        print(f"Loading metadata for {files_after_filtering:,} files...")
+        for audio_path in tqdm(audio_files, desc="Loading metadata", unit="file"):
+            try:
+                info = self._get_audio_info(audio_path)
+                orig_sr = info['sample_rate']
+                num_samples = info['num_samples']
+                num_channels = info['channels']
+                
+                meta.append({
+                    "audio_path": str(audio_path),
+                    "sample_rate": orig_sr,
+                    "num_samples": num_samples,
+                    "channels": num_channels,
+                })
+                
+                if orig_sr != self.sample_rate and orig_sr not in resamplers:
+                    resamplers[orig_sr] = torchaudio.transforms.Resample(
+                        orig_sr, self.sample_rate
+                    )
+            except RuntimeError as e:
+                print(f"Warning: Skipping {audio_path} - {e}")
+                continue
+        
+        valid_files = len(meta)
+        if valid_files < files_after_filtering:
+            print(
+                f"Warning: {files_after_filtering - valid_files:,} files "
+                "failed metadata loading"
+            )
+        print(f"Loaded {valid_files:,} files, generating clips...")
+        
+        return meta, resamplers
+    
+    def __len__(self) -> int:
         return len(self.index_map)
     
     def __getitem__(self, idx: int):

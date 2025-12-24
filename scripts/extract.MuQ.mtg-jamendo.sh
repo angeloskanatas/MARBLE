@@ -7,7 +7,7 @@
 #SBATCH --gres=gpu:tesla:1
 #SBATCH --mem=64G
 #SBATCH --time=04:00:00
-#SBATCH --chdir=/home/akanatas/MARBLE
+#SBATCH --chdir=/home/akanatas/projects/layerbylayer/MARBLE
 #SBATCH --output=%x-%j.out
 #SBATCH --error=%x-%j.err
 

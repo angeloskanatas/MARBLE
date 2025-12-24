@@ -19,8 +19,8 @@ trainer:
   logger:
     class_path: lightning.pytorch.loggers.CSVLogger
     init_args:
-      # save_dir: "/scratch/mtg/akanatas/output/extracted_embeddings/mert-95M_mtg-jamendo/"
-      save_dir: "/gpfs/projects/mtg/projects/layerbylayer/output/extracted_embeddings/mert-95M_mtg-jamendo/"
+      save_dir: "/scratch/mtg/akanatas/projects/layerbylayer/output/extracted_embeddings/mert-95M_mtg-jamendo/"
+      # save_dir: "/gpfs/projects/mtg/projects/layerbylayer/output/extracted_embeddings/mert-95M_mtg-jamendo/"
       # save_dir: "/home/akanatas/output/extracted_embeddings/mert-95M_mtg-jamendo/"
 
 model:
@@ -45,8 +45,8 @@ model:
     
     extraction:
       split: test  # options: train, val, test
-      # output_dir: /scratch/mtg/akanatas/output/extracted_embeddings/mert-95M_mtg-jamendo/
-      output_dir: /gpfs/projects/mtg/projects/layerbylayer/output/extracted_embeddings/mert-95M_mtg-jamendo/
+      output_dir: /scratch/mtg/akanatas/projects/layerbylayer/output/extracted_embeddings/mert-95M_mtg-jamendo/
+      # output_dir: /gpfs/projects/mtg/projects/layerbylayer/output/extracted_embeddings/mert-95M_mtg-jamendo/
       # output_dir: /home/akanatas/output/extracted_embeddings/mert-95M_mtg-jamendo/
       max_samples: 10000  # null = all samples, or set to limit samples processed
       # subset_fraction: 0.1  # alternative to max_samples
