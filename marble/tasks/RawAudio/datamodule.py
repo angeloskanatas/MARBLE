@@ -253,10 +253,7 @@ class SimpleRawAudioDataset(Dataset):
     def _get_audio_info_torchaudio(self, audio_path: str) -> dict:
         """Get audio metadata using torchaudio, with soundfile fallback."""
         try:
-            if self.backend is not None:
-                info = torchaudio.info(str(audio_path), backend=self.backend)
-            else:
-                info = torchaudio.info(str(audio_path))
+            info = torchaudio.info(str(audio_path), backend=self.backend)
             return {
                 "sample_rate": info.sample_rate,
                 "num_samples": info.num_frames,
