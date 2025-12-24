@@ -116,7 +116,7 @@ data:
       init_args:
         # audio_dir:  # use audio_dir for directory scanning mode
         # jsonl: /gpfs/projects/mtg/projects/discotube/discotube_balanced_ids.jsonl
-        jsonl: /home/akanatas/discotube_balanced_ids.jsonl
+        jsonl: /home/akanatas/discotube/discotube_balanced_ids.jsonl
         sample_rate: 32000
         channels: 1
         clip_seconds: 15.0
@@ -131,7 +131,7 @@ data:
       init_args:
         # audio_dir:  # use audio_dir for directory scanning mode
         # jsonl: /gpfs/projects/mtg/projects/discotube/discotube_balanced_ids.jsonl
-        jsonl: /home/akanatas/discotube_balanced_ids.jsonl
+        jsonl: /home/akanatas/discotube/discotube_balanced_ids.jsonl
         sample_rate: 32000
         channels: 1
         clip_seconds: 15.0
@@ -146,14 +146,15 @@ data:
       init_args:
         # audio_dir:  # use audio_dir for directory scanning mode
         # jsonl: /gpfs/projects/mtg/projects/discotube/discotube_balanced_ids.jsonl
-        jsonl: /home/akanatas/discotube_balanced_ids.jsonl
+        jsonl: /home/akanatas/discotube/discotube_balanced_ids.jsonl
         sample_rate: 32000
         channels: 1
         clip_seconds: 15.0
         min_clip_ratio: 0.8  # at least 80% of the clip length
         channel_mode: mix  # first, random, mix
-        max_files: 1000  # null = all files
+        max_files: 5000  # null = all files
         random_seed: 42
+        max_duration_seconds: 1800
         backend: "soundfile"
         # backend: null  # optional: torchaudio backend (e.g., "soundfile", "sox_io")
 

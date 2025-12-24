@@ -40,6 +40,7 @@ class SimpleRawAudioDataset(Dataset):
         recursive: bool = True,
         max_files: Optional[int] = None,
         random_seed: Optional[int] = None,
+        max_duration_seconds: Optional[float] = None,
     ):
         """
         Args:
@@ -58,6 +59,7 @@ class SimpleRawAudioDataset(Dataset):
             max_files: Optional maximum number of files to process. If set, files are randomly
                       sampled before metadata loading.
             random_seed: Random seed for file sampling when max_files is set.
+            max_duration_seconds: Optional maximum duration in seconds. Files exceeding this are filtered.
         """
         if (audio_dir is None) == (jsonl is None):
             raise ValueError(
@@ -76,11 +78,11 @@ class SimpleRawAudioDataset(Dataset):
         
         if jsonl is not None:
             self.meta, self.resamplers = self._load_from_jsonl(
-                jsonl, max_files, random_seed
+                jsonl, max_files, random_seed, max_duration_seconds
             )
         else:
             self.meta, self.resamplers = self._load_from_directory(
-                audio_dir, extensions, recursive, max_files, random_seed
+                audio_dir, extensions, recursive, max_files, random_seed, max_duration_seconds
             )
         
         if len(self.meta) == 0:
@@ -122,6 +124,7 @@ class SimpleRawAudioDataset(Dataset):
         jsonl_path: str,
         max_files: Optional[int],
         random_seed: Optional[int],
+        max_duration_seconds: Optional[float],
     ) -> Tuple[List[dict], dict]:
         """Load audio metadata from JSONL file."""
         jsonl_file = Path(jsonl_path)
@@ -171,11 +174,38 @@ class SimpleRawAudioDataset(Dataset):
         else:
             print(f"Found {total_files:,} files in JSONL")
         
+        if max_duration_seconds is not None:
+            if max_duration_seconds <= 0:
+                raise ValueError(f"max_duration_seconds must be positive, got {max_duration_seconds}")
+            filtered_entries = []
+            for entry in all_entries:
+                try:
+                    sample_rate = float(entry.get('sample_rate', 0))
+                    num_samples = float(entry.get('num_samples', 0))
+                except (ValueError, TypeError):
+                    continue
+                if sample_rate <= 0 or num_samples <= 0:
+                    continue
+                duration_sec = num_samples / sample_rate
+                if duration_sec <= max_duration_seconds:
+                    filtered_entries.append(entry)
+            removed = len(all_entries) - len(filtered_entries)
+            all_entries = filtered_entries
+            if len(all_entries) == 0:
+                raise ValueError(
+                    f"No entries found after filtering by max_duration_seconds={max_duration_seconds} "
+                    f"({max_duration_seconds/60:.1f} min)"
+                )
+            print(
+                f"Filtered by duration: {removed:,} files removed "
+                f"(>{max_duration_seconds/60:.1f} min), {len(all_entries):,} files kept"
+            )
+        
         meta: List[dict] = []
         resamplers: dict = {}
         
-        print(f"Loading metadata for {len(all_entries):,} files...")
-        for entry in tqdm(all_entries, desc="Loading metadata", unit="file"):
+        print(f"Validating metadata for {len(all_entries):,} entries...")
+        for entry in tqdm(all_entries, desc="Validating entries", unit="file"):
             audio_path = entry.get('audio_path')
             required_fields = ['sample_rate', 'num_samples', 'channels']
             if not all(field in entry for field in required_fields):
@@ -227,6 +257,11 @@ class SimpleRawAudioDataset(Dataset):
             s = j["streams"][0]
             sample_rate = int(s["sample_rate"])
             channels = int(s["channels"])
+            
+            if sample_rate <= 0:
+                raise RuntimeError(f"Invalid sample_rate={sample_rate} from ffprobe")
+            if channels <= 0:
+                raise RuntimeError(f"Invalid channels={channels} from ffprobe")
             
             duration_sec = None
             if s.get("duration_ts") is not None and s.get("time_base"):
@@ -286,6 +321,7 @@ class SimpleRawAudioDataset(Dataset):
         recursive: bool,
         max_files: Optional[int],
         random_seed: Optional[int],
+        max_duration_seconds: Optional[float],
     ) -> Tuple[List[dict], dict]:
         """Load audio metadata by scanning directory."""
         audio_dir_path = Path(audio_dir)
@@ -353,10 +389,36 @@ class SimpleRawAudioDataset(Dataset):
                 print(f"Warning: Skipping {audio_path} - {e}")
                 continue
         
-        valid_files = len(meta)
-        if valid_files < files_after_filtering:
+        files_after_metadata = len(meta)
+        
+        if max_duration_seconds is not None:
+            if max_duration_seconds <= 0:
+                raise ValueError(f"max_duration_seconds must be positive, got {max_duration_seconds}")
+            filtered_meta = []
+            for entry in meta:
+                sample_rate = entry['sample_rate']
+                num_samples = entry['num_samples']
+                if sample_rate <= 0:
+                    continue
+                duration_sec = num_samples / sample_rate
+                if duration_sec <= max_duration_seconds:
+                    filtered_meta.append(entry)
+            removed = len(meta) - len(filtered_meta)
+            meta = filtered_meta
+            if len(meta) == 0:
+                raise ValueError(
+                    f"No files found after filtering by max_duration_seconds={max_duration_seconds} "
+                    f"({max_duration_seconds/60:.1f} min)"
+                )
             print(
-                f"Warning: {files_after_filtering - valid_files:,} files "
+                f"Filtered by duration: {removed:,} files removed "
+                f"(>{max_duration_seconds/60:.1f} min), {len(meta):,} files kept"
+            )
+        
+        valid_files = len(meta)
+        if files_after_metadata < files_after_filtering:
+            print(
+                f"Warning: {files_after_filtering - files_after_metadata:,} files "
                 "failed metadata loading"
             )
         print(f"Loaded {valid_files:,} files, generating clips...")
