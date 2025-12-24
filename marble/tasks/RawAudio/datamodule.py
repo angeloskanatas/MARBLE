@@ -20,9 +20,10 @@ class SimpleRawAudioDataset(Dataset):
     """
     Dataset for raw audio files used for extraction tasks.
     
-    Splits each audio file into non-overlapping clips of length `clip_seconds`.
-
-    Returns (waveform, None, path).
+    Scans directory for audio files and builds metadata on-the-fly.
+    Splits each audio file into non-overlapping clips of length `clip_seconds` (last clip zero-padded).
+    
+    Returns (waveform, None, path) for extraction tasks.
     """
     
     def __init__(
@@ -375,8 +376,7 @@ class SimpleRawAudioDataset(Dataset):
             waveform, _ = torchaudio.load(
                 path,
                 frame_offset=offset,
-                num_frames=orig_clip,
-                backend=self.backend
+                num_frames=orig_clip
             )
         except (OSError, RuntimeError) as e:
             raise RuntimeError(f"Failed to load audio file '{path}': {e}") from e
