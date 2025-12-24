@@ -11,6 +11,7 @@ import torchaudio
 import torch.nn.functional as F
 from torch.utils.data import Dataset, DataLoader
 from tqdm import tqdm
+import soundfile as sf
 
 from marble.core.base_datamodule import BaseDataModule
 from marble.utils.utils import list_audio_files
@@ -20,10 +21,9 @@ class SimpleRawAudioDataset(Dataset):
     """
     Dataset for raw audio files used for extraction tasks.
     
-    Scans directory for audio files and builds metadata on-the-fly.
-    Splits each audio file into non-overlapping clips of length `clip_seconds` (last clip zero-padded).
-    
-    Returns (waveform, None, path) for extraction tasks.
+    Supports directory scanning or JSONL file loading.
+    Splits each audio file into non-overlapping clips of length `clip_seconds`.
+    Returns (waveform, None, path).
     """
     
     def __init__(
@@ -56,7 +56,7 @@ class SimpleRawAudioDataset(Dataset):
             extensions: File extensions to consider as audio files (if audio_dir is specified).
             recursive: If True, search recursively in subdirectories (if audio_dir is specified).
             max_files: Optional maximum number of files to process. If set, files are randomly
-                      sampled before metadata loading. If None, processes all files.
+                      sampled before metadata loading.
             random_seed: Random seed for file sampling when max_files is set.
         """
         if (audio_dir is None) == (jsonl is None):
@@ -251,16 +251,27 @@ class SimpleRawAudioDataset(Dataset):
             raise RuntimeError(f"ffprobe failed for {audio_path}: {e}")
     
     def _get_audio_info_torchaudio(self, audio_path: str) -> dict:
-        """Get audio metadata using torchaudio (works for wav/flac/mp3)."""
+        """Get audio metadata using torchaudio, with soundfile fallback."""
         try:
-            info = torchaudio.info(str(audio_path), backend=self.backend)
+            if self.backend is not None:
+                info = torchaudio.info(str(audio_path), backend=self.backend)
+            else:
+                info = torchaudio.info(str(audio_path))
             return {
                 "sample_rate": info.sample_rate,
                 "num_samples": info.num_frames,
                 "channels": info.num_channels,
             }
-        except (OSError, RuntimeError) as e:
-            raise RuntimeError(f"torchaudio.info failed for {audio_path}: {e}")
+        except (OSError, RuntimeError):
+            try:
+                with sf.SoundFile(str(audio_path)) as f:
+                    return {
+                        "sample_rate": f.samplerate,
+                        "num_samples": f.frames,
+                        "channels": f.channels,
+                    }
+            except Exception as e:
+                raise RuntimeError(f"Both torchaudio.info and soundfile failed for {audio_path}: {e}")
     
     def _get_audio_info(self, audio_path: str) -> dict:
         """Get audio metadata, using ffprobe for container formats, torchaudio for others."""
@@ -376,7 +387,8 @@ class SimpleRawAudioDataset(Dataset):
             waveform, _ = torchaudio.load(
                 path,
                 frame_offset=offset,
-                num_frames=orig_clip
+                num_frames=orig_clip,
+                # backend=self.backend
             )
         except (OSError, RuntimeError) as e:
             raise RuntimeError(f"Failed to load audio file '{path}': {e}") from e
