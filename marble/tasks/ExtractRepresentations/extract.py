@@ -139,6 +139,7 @@ class ExtractRepresentationsTask(BaseTask):
         else:
             self.num_augmentations = 0
             self.augmentation = None
+            self.augmentation_seed = None
             if augmentation_config and not AUDIOMENTATIONS_AVAILABLE:
                 print("Warning: Augmentation config provided but audiomentations not installed.")
         

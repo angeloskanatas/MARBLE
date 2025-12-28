@@ -2,7 +2,7 @@
 import torch
 from lightning.pytorch.cli import LightningCLI
 
-# enable tensor cores for RTX 5090
+# enable tensor cores for modern NVIDIA GPUs (e.g., RTX 5090)
 if torch.cuda.is_available():
     torch.set_float32_matmul_precision('high')
 

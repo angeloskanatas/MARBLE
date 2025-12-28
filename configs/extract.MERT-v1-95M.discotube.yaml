@@ -53,7 +53,7 @@ model:
       sampling_seed: 17
       save_frame_level: false   # frame-level embeddings (N, T, H)
       save_sequence_level: true  # sequence-level embeddings (N, H)
-      # Note: models that DO support frame-level: MERT, MuQ, MusicFM, MusicGen, DaSheng, Xcodec, Qwen2Audio; models that DON'T support frame-level: MuQMuLan, CLaMP3 (already pooled)
+      # Note: models that DO support frame-level: MERT, MuQ, MusicFM, MusicGen, DaSheng, Xcodec, Qwen2Audio, OMAR-RQ; models that DON'T support frame-level: MuQMuLan, CLaMP3 (already pooled)
       
       # optional: extract multiple augmented versions of the same audio
       augmentation:
