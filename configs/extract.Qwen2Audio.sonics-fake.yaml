@@ -19,22 +19,24 @@ trainer:
   logger:
     class_path: lightning.pytorch.loggers.CSVLogger
     init_args:
-      save_dir: "/scratch/mtg/akanatas/projects/layerbylayer/output/extracted_embeddings/musicgen-small_mtg-jamendo/"
-      # save_dir: "/gpfs/projects/mtg/projects/layerbylayer/output/extracted_embeddings/musicgen-small_mtg-jamendo/"
-      # save_dir: "/home/akanatas/output/extracted_embeddings/musicgen-small_mtg-jamendo/"
+      save_dir: "/scratch/mtg/akanatas/projects/layerbylayer/output/extracted_embeddings/qwen2-audio-7B_sonics-fake/"
+      # save_dir: "/gpfs/projects/mtg/projects/layerbylayer/output/extracted_embeddings/qwen2-audio-7B_sonics-fake/"
+      # save_dir: "/home/akanatas/output/extracted_embeddings/qwen2-audio-7B_sonics-fake/"
 
 model:
   class_path: marble.tasks.ExtractRepresentations.extract.ExtractRepresentationsTask
   init_args:
-    sample_rate: 32000
+    sample_rate: 16000
     use_ema: false
 
     encoder:
-      class_path: marble.encoders.MusicGen.model.MusicGenEncoder
+      class_path: marble.encoders.Qwen2AudioInstructEncoder.model.Qwen2AudioInstructEncoder
       init_args:
-        pre_trained_folder: null
-        model_size: small
-        train_mode: freeze  # just inference
+        pre_trained_folder: "Qwen/Qwen2-Audio-7B"
+        #   - "Qwen/Qwen2-Audio-7B" (base model)
+        #   - "Qwen/Qwen2-Audio-7B-Instruct" (instruction-tuned model)
+        train_mode: freeze
+        attn_implementation: eager  # options: "flash_attention_2", "sdpa","eager"
       
     emb_transforms:
       - class_path: marble.modules.transforms.LayerSelector
@@ -44,15 +46,15 @@ model:
     
     extraction:
       split: test  # options: train, val, test
-      output_dir: /scratch/mtg/akanatas/projects/layerbylayer/output/extracted_embeddings/musicgen-small_mtg-jamendo/
-      # output_dir: /gpfs/projects/mtg/projects/layerbylayer/output/extracted_embeddings/musicgen-small_mtg-jamendo/
-      # output_dir: /home/akanatas/output/extracted_embeddings/musicgen-small_mtg-jamendo/
+      output_dir: /scratch/mtg/akanatas/projects/layerbylayer/output/extracted_embeddings/qwen2-audio-7B_sonics-fake/
+      # output_dir: /gpfs/projects/mtg/projects/layerbylayer/output/extracted_embeddings/qwen2-audio-7B_sonics-fake/
+      # output_dir: /home/akanatas/output/extracted_embeddings/qwen2-audio-7B_sonics-fake/
       max_samples: 10000  # null = all samples, or set to limit samples processed
       # subset_fraction: 0.1  # alternative to max_samples
       sampling_seed: 17
       save_frame_level: false   # frame-level embeddings (N, T, H)
       save_sequence_level: true  # sequence-level embeddings (N, H)
-      # Note: models that DO support frame-level: MERT, MuQ, MusicFM, MusicGen, DaSheng, Xcodec, Qwen2Audio; models that DON'T support frame-level: MuQMuLan, CLaMP3 (already pooled)
+      # Note: models that DO support frame-level: MERT, MuQ, MusicFM, MusicGen, DaSheng, Xcodec, Qwen2Audio, OMAR-RQ; models that DON'T support frame-level: MuQMuLan, CLaMP3 (already pooled)
       
       # optional: extract multiple augmented versions of the same audio
       augmentation:
@@ -88,41 +90,36 @@ model:
 data:
   class_path: marble.tasks.RawAudio.datamodule.RawAudioDataModule
   init_args:
-    batch_size: 32
+    batch_size: 16
     num_workers: 16
 
     audio_transforms:
       train:
-        - class_path: marble.encoders.MusicGen.model.MusicGenFeatureExtractor
+        - class_path: marble.encoders.Qwen2AudioInstructEncoder.model.Qwen2AudioInstructFeatureExtractor
           init_args:
-            pre_trained_folder: null
-            model_size: small
+            pre_trained_folder: "Qwen/Qwen2-Audio-7B"  # or "Qwen/Qwen2-Audio-7B-Instruct"
             squeeze: true
       val:
-        - class_path: marble.encoders.MusicGen.model.MusicGenFeatureExtractor
+        - class_path: marble.encoders.Qwen2AudioInstructEncoder.model.Qwen2AudioInstructFeatureExtractor
           init_args:
-            pre_trained_folder: null
-            model_size: small
+            pre_trained_folder: "Qwen/Qwen2-Audio-7B"  # or "Qwen/Qwen2-Audio-7B-Instruct"
             squeeze: true
       test:
-        - class_path: marble.encoders.MusicGen.model.MusicGenFeatureExtractor
+        - class_path: marble.encoders.Qwen2AudioInstructEncoder.model.Qwen2AudioInstructFeatureExtractor
           init_args:
-            pre_trained_folder: null
-            model_size: small
+            pre_trained_folder: "Qwen/Qwen2-Audio-7B"  # or "Qwen/Qwen2-Audio-7B-Instruct"
             squeeze: true
 
     train:
       class_path: marble.tasks.RawAudio.datamodule.SimpleRawAudioDataset
       init_args:
-        audio_dir: /gpfs/projects/mtg/audio/stable/mtg-jamendo/raw_30s/audio
-        # audio_dir: /mnt/mtg/audio/stable/mtg-jamendo/raw_30s/audio
-        sample_rate: 32000
+        # audio_dir:  # use audio_dir for directory scanning mode
+        jsonl: /gpfs/home/akanatas/projects/layerbylayer/sonics/dataset/train_fake.jsonl
+        sample_rate: 16000
         channels: 1
         clip_seconds: 15.0
         min_clip_ratio: 0.8  # at least 80% of the clip length
         channel_mode: mix  # first, random, mix
-        extensions: ['.wav', '.flac', '.mp3', '.webm', '.mp4']  # optional: specify file extensions
-        recursive: true  # optional: search recursively in subdirectories
         max_files: null  # null = all files
         random_seed: 42
         backend: "soundfile"
@@ -130,15 +127,13 @@ data:
     val:
       class_path: marble.tasks.RawAudio.datamodule.SimpleRawAudioDataset
       init_args:
-        audio_dir: /gpfs/projects/mtg/audio/stable/mtg-jamendo/raw_30s/audio
-        # audio_dir: /mnt/mtg/audio/stable/mtg-jamendo/raw_30s/audio
-        sample_rate: 32000
+        # audio_dir:  # use audio_dir for directory scanning mode
+        jsonl: /gpfs/home/akanatas/projects/layerbylayer/sonics/dataset/valid_fake.jsonl
+        sample_rate: 16000
         channels: 1
         clip_seconds: 15.0
         min_clip_ratio: 0.8  # at least 80% of the clip length
         channel_mode: mix  # first, random, mix
-        extensions: ['.wav', '.flac', '.mp3', '.webm', '.mp4']  # optional: specify file extensions
-        recursive: true  # optional: search recursively in subdirectories
         max_files: null  # null = all files
         random_seed: 42
         backend: "soundfile"
@@ -146,17 +141,16 @@ data:
     test:
       class_path: marble.tasks.RawAudio.datamodule.SimpleRawAudioDataset
       init_args:
-        audio_dir: /gpfs/projects/mtg/audio/stable/mtg-jamendo/raw_30s/audio
-        # audio_dir: /mnt/mtg/audio/stable/mtg-jamendo/raw_30s/audio
-        sample_rate: 32000
+        # audio_dir:  # use audio_dir for directory scanning mode
+        jsonl: /gpfs/home/akanatas/projects/layerbylayer/sonics/dataset/test_fake.jsonl
+        sample_rate: 16000
         channels: 1
         clip_seconds: 15.0
         min_clip_ratio: 0.8  # at least 80% of the clip length
         channel_mode: mix  # first, random, mix
-        extensions: ['.wav', '.flac', '.mp3', '.webm', '.mp4']  # optional: specify file extensions
-        recursive: true  # optional: search recursively in subdirectories
-        max_files: 1000  # null = all files
+        max_files: 5000  # null = all files
         random_seed: 42
+        max_duration_seconds: 300
         backend: "soundfile"
         # backend: null  # optional: torchaudio backend (e.g., "soundfile", "sox_io")
 

@@ -1,12 +1,12 @@
 #!/bin/bash
-#SBATCH --job-name=extract_musicgen-small_mtg-jamendo
+#SBATCH --job-name=extract_musicgen-medium_mtg-jamendo
 #SBATCH --partition=medium
 #SBATCH --nodes=1
 #SBATCH --ntasks=1
 #SBATCH --cpus-per-task=24
 #SBATCH --gres=gpu:quadro:1
-#SBATCH --mem=64G
-#SBATCH --time=04:00:00
+#SBATCH --mem=128G
+#SBATCH --time=08:00:00
 #SBATCH --chdir=/home/akanatas/projects/layerbylayer/MARBLE
 #SBATCH --output=%x-%j.out
 #SBATCH --error=%x-%j.err
@@ -17,4 +17,4 @@ conda activate layerbylayer
 
 module load CUDA/11.4.3
 
-python cli.py test -c configs/extract.MusicGen-small.mtg-jamendo.yaml
+python cli.py test -c configs/extract.MusicGen.mtg-jamendo.yaml

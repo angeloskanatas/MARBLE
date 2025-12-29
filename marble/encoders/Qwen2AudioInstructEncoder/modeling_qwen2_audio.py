@@ -620,14 +620,14 @@ class Qwen2AudioEncoder(Qwen2AudioPreTrainedModel):
             if output_attentions:
                 all_attentions = all_attentions + (layer_outputs[1],)
 
-        # Ignore copy
+        if output_hidden_states:
+            encoder_states = encoder_states + (hidden_states,)
+        
         hidden_states = hidden_states.permute(0, 2, 1)
         hidden_states = self.avg_pooler(hidden_states)
         hidden_states = hidden_states.permute(0, 2, 1)
 
         hidden_states = self.layer_norm(hidden_states)
-        if output_hidden_states:
-            encoder_states = encoder_states + (hidden_states,)
 
         if not return_dict:
             return tuple(v for v in [hidden_states, encoder_states, all_attentions] if v is not None)

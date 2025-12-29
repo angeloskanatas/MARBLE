@@ -76,6 +76,11 @@ class Qwen2AudioInstructEncoder(BaseEncoder):
         # Move inputs to model device
         device = next(self.model.parameters()).device
         input_features = input_features.to(device)
+        
+        # Shape validation
+        assert input_features.ndim == 3, f"Expected 3D tensor (batch, n_mels, seq_len), got {input_features.ndim}D: {input_features.shape}"
+        assert input_features.shape[1] == 128, f"Expected 128 mel bins, got {input_features.shape[1]}"
+        
         if attention_mask is not None:
             attention_mask = attention_mask.to(device)
 

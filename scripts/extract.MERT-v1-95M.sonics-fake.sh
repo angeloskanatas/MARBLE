@@ -1,5 +1,5 @@
 #!/bin/bash
-#SBATCH --job-name=extract_musicgen-small_discotube
+#SBATCH --job-name=extract_mert-95M_sonics-fake
 #SBATCH --partition=medium
 #SBATCH --nodes=1
 #SBATCH --ntasks=1
@@ -17,4 +17,4 @@ conda activate layerbylayer
 
 module load CUDA/11.4.3
 
-python cli.py test -c configs/extract.MusicGen-small.discotube.yaml
+python cli.py test -c configs/extract.MERT-v1-95M.sonics-fake.yaml
