@@ -3,7 +3,7 @@ from typing import Sequence, Dict, Optional, Union, Tuple, List
 
 import torch
 import torch.nn as nn
-from transformers import Wav2Vec2FeatureExtractor
+from transformers import Wav2Vec2FeatureExtractor, AutoConfig
 
 from marble.encoders.MERT.MusicHubert import MusicHubertModel
 from marble.core.base_encoder import BaseEncoder
@@ -29,6 +29,7 @@ class MERT_v1_95M_Encoder(BaseEncoder):
         train_mode: str = "freeze",  # one of ["freeze", "full", "lora"]
         force_half: bool = False,
         preprocess_in_forward: bool = False,
+        use_random_init: bool = False,
         lora_r: int = 8,
         lora_alpha: int = 16,
         lora_dropout: float = 0.1,
@@ -43,6 +44,7 @@ class MERT_v1_95M_Encoder(BaseEncoder):
                               or "lora" to freeze base and add LoRA adapters.
             force_half (bool): If True, cast model weights to float16.
             preprocess_in_forward (bool): If True, run feature extraction inside forward().
+            use_random_init (bool): If True, initialize model with random weights instead of pretrained.
             lora_r (int): LoRA adapter rank (only if train_mode="lora").
             lora_alpha (int): LoRA scaling alpha (only if train_mode="lora").
             lora_dropout (float): Dropout probability for LoRA adapters.
@@ -57,9 +59,12 @@ class MERT_v1_95M_Encoder(BaseEncoder):
             do_normalize=self.PROCESSOR_NORMALIZE,
         )
         # Load the core MusicHuBERT model
-        self.model = MusicHubertModel.from_pretrained(
-            pre_trained_folder or self.HUGGINGFACE_MODEL_NAME
-        )
+        config_source = pre_trained_folder or self.HUGGINGFACE_MODEL_NAME
+        if use_random_init:  # random initialization
+            config = AutoConfig.from_pretrained(config_source, trust_remote_code=True)
+            self.model = MusicHubertModel(config)
+        else:  # pretrained model
+            self.model = MusicHubertModel.from_pretrained(config_source)
 
         # Optionally cast model weights to half precision for memory savings
         if force_half:

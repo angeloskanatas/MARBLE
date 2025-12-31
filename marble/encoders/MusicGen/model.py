@@ -1,6 +1,7 @@
 # marble/encoders/MusicGen/model.py
 from typing import Dict
 import torch
+from transformers import AutoConfig
 from marble.core.base_encoder import BaseEncoder
 from marble.core.base_transform import BaseAudioTransform
 
@@ -26,6 +27,7 @@ class MusicGenEncoder(BaseEncoder):
         pre_trained_folder: str = None,
         model_size: str = "small",
         train_mode: str = "freeze",
+        use_random_init: bool = False,
     ) -> None:
         """
         Initialize MusicGen encoder wrapper.
@@ -34,6 +36,7 @@ class MusicGenEncoder(BaseEncoder):
             pre_trained_folder: Path or HF identifier of the pretrained model
             model_size: Size variant of MusicGen model
             train_mode: "freeze" to freeze parameters, "full" for fine-tuning
+            use_random_init: If True, initialize decoder with random weights
         """
         super().__init__()
         from transformers import MusicgenForConditionalGeneration
@@ -43,8 +46,6 @@ class MusicGenEncoder(BaseEncoder):
         self.sample_rate = self.SAMPLING_RATE
         
         print(f"Loading MusicGen model from {repo}")
-        self.full_model = MusicgenForConditionalGeneration.from_pretrained(repo)
-        
         # MusicGen structure (from config.json):
         # - audio_encoder: EnCodec model (facebook/encodec_32khz)
         #   - codebook_size: 2048 (vocab_size per codebook) - consistent across all model sizes
@@ -58,6 +59,14 @@ class MusicGenEncoder(BaseEncoder):
         #   - num_hidden_layers: varies by model (24 small, 48 medium/large)
 
         # For representation extraction, we use the decoder's hidden states
+        if use_random_init:  # random initialization
+            config = AutoConfig.from_pretrained(repo)
+            self.full_model = MusicgenForConditionalGeneration(config)
+            pretrained_model = MusicgenForConditionalGeneration.from_pretrained(repo)
+            self.full_model.audio_encoder = pretrained_model.audio_encoder
+        else:  # pretrained model
+            self.full_model = MusicgenForConditionalGeneration.from_pretrained(repo)
+
         self.model = self.full_model.decoder
         self.audio_encoder = self.full_model.audio_encoder
         
