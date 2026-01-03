@@ -1,10 +1,10 @@
 #!/bin/bash
-#SBATCH --job-name=extract_musicgen-medium_sonics-fake
+#SBATCH --job-name=extract_musicgen-small_sonics-fake
 #SBATCH --partition=medium
 #SBATCH --nodes=1
 #SBATCH --ntasks=1
 #SBATCH --cpus-per-task=24
-#SBATCH --gres=gpu:quadro:1
+#SBATCH --gres=gpu:tesla:1
 #SBATCH --mem=128G
 #SBATCH --time=08:00:00
 #SBATCH --chdir=/home/akanatas/projects/layerbylayer/MARBLE

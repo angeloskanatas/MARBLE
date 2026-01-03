@@ -27,7 +27,7 @@ class MusicGenEncoder(BaseEncoder):
         pre_trained_folder: str = None,
         model_size: str = "small",
         train_mode: str = "freeze",
-        use_random_init: bool = False,
+        random_init: bool = False,
     ) -> None:
         """
         Initialize MusicGen encoder wrapper.
@@ -36,7 +36,7 @@ class MusicGenEncoder(BaseEncoder):
             pre_trained_folder: Path or HF identifier of the pretrained model
             model_size: Size variant of MusicGen model
             train_mode: "freeze" to freeze parameters, "full" for fine-tuning
-            use_random_init: If True, initialize decoder with random weights
+            random_init: If True, initialize decoder with random weights
         """
         super().__init__()
         from transformers import MusicgenForConditionalGeneration
@@ -59,7 +59,7 @@ class MusicGenEncoder(BaseEncoder):
         #   - num_hidden_layers: varies by model (24 small, 48 medium/large)
 
         # For representation extraction, we use the decoder's hidden states
-        if use_random_init:  # random initialization
+        if random_init:  # random initialization
             config = AutoConfig.from_pretrained(repo)
             self.full_model = MusicgenForConditionalGeneration(config)
             pretrained_model = MusicgenForConditionalGeneration.from_pretrained(repo)
