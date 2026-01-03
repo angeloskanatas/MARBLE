@@ -116,6 +116,7 @@ Embeddings are saved as per-file `.npy` files organized by layer: `output/extrac
 | **OMAR-RQ**                  | Open Music Audio Representation Model Trained with Multi-Feature Masked Token Prediction.                     | [arXiv:2507.03482](https://arxiv.org/abs/2507.03482)          | [GitHub MTG/omar-rq](https://github.com/MTG/omar-rq) |
 | **Qwen2_5OmniEncoder**       | Qwen 2.5-Omni Audio Tower: a multimodal generalist model supporting text, image, audio, and video.           | [arXiv:2503.20215](https://arxiv.org/abs/2503.20215)          | [GitHub QwenLM/Qwen2.5-Omni](https://github.com/QwenLM/Qwen2.5-Omni) |
 | **Qwen2AudioInstructEncoder** | Instruction-tuned variant of Qwen2-Audio Encoder for interactive audio chat.                                 | [arXiv:2407.10759](https://arxiv.org/abs/2407.10759)          | [GitHub QwenLM/Qwen2-Audio](https://github.com/QwenLM/Qwen2-Audio)  
+| **SLAP**                     | Siamese language-audio pretraining without negative samples for music understanding. | [arXiv:2506.17815](https://arxiv.org/abs/2506.17815)          | [GitHub Pliploop/SLAP](https://github.com/Pliploop/SLAP) |
 | **Xcodec**                   | Improves codec semantics for audio LLMs by integrating semantic features pre-quantization.                  | [arXiv:2408.17175](https://arxiv.org/abs/2408.17175)          | [GitHub zhenye234/xcodec](https://github.com/zhenye234/xcodec)  |
 
 
