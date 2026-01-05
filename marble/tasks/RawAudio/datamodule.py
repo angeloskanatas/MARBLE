@@ -356,7 +356,7 @@ class SimpleRawAudioDataset(Dataset):
                 "num_samples": info.num_frames,
                 "channels": info.num_channels,
             }
-        except (OSError, RuntimeError):
+        except (OSError, AttributeError):
             try:
                 with sf.SoundFile(str(audio_path)) as f:
                     return {
