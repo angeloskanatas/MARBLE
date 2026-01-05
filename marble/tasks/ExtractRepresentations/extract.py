@@ -809,10 +809,15 @@ class ExtractRepresentationsTask(BaseTask):
                                         path_obj = Path(path)
                                         if self._audio_dir and path_obj.is_absolute():
                                             try:
-                                                rel_path = path_obj.relative_to(self._audio_dir)
+                                                path_resolved = path_obj.resolve()
+                                                rel_path = path_resolved.relative_to(self._audio_dir)
                                                 relative_paths.append(rel_path.as_posix())
-                                            except ValueError:
-                                                relative_paths.append(path_obj.as_posix())
+                                            except (ValueError, OSError, RuntimeError):
+                                                try:
+                                                    rel_path = path_obj.relative_to(self._audio_dir)
+                                                    relative_paths.append(rel_path.as_posix())
+                                                except ValueError:
+                                                    relative_paths.append(path_obj.as_posix())
                                         else:
                                             relative_paths.append(path_obj.as_posix())
                                     self._sample_to_audio_path.extend(relative_paths)
