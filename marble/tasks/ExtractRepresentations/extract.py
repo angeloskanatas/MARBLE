@@ -819,7 +819,7 @@ class ExtractRepresentationsTask(BaseTask):
                                                         rel_path = path_obj.relative_to(self._audio_dir)
                                                         relative_paths.append(rel_path.as_posix())
                                                     except ValueError:
-                                                        relative_paths.append(path_obj.as_posix())
+                                                        relative_paths.append(path_obj.name)
                                             else:
                                                 if self._computed_base_dir is None:
                                                     all_paths = [str(p) for p in base_audio_paths]
@@ -846,9 +846,9 @@ class ExtractRepresentationsTask(BaseTask):
                                                             rel_path = path_obj.relative_to(self._computed_base_dir)
                                                             relative_paths.append(rel_path.as_posix())
                                                         except ValueError:
-                                                            relative_paths.append(path_obj.as_posix())
+                                                            relative_paths.append(path_obj.name)
                                                 else:
-                                                    relative_paths.append(path_obj.as_posix())
+                                                    relative_paths.append(path_obj.name)
                                         else:
                                             relative_paths.append(path_obj.as_posix())
                                     self._sample_to_audio_path.extend(relative_paths)
