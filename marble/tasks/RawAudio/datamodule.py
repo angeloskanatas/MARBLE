@@ -83,10 +83,11 @@ class SimpleRawAudioDataset(Dataset):
         self.backend = backend
         
         if jsonl is not None:
-            self.meta, self.resamplers = self._load_from_jsonl(
+            self.meta, self.resamplers, self.audio_dir = self._load_from_jsonl(
                 jsonl, max_files, random_seed, max_duration_seconds
             )
         else:
+            self.audio_dir = audio_dir
             self.meta, self.resamplers = self._load_from_directory(
                 audio_dir, extensions, recursive, max_files, random_seed, max_duration_seconds
             )
@@ -163,13 +164,14 @@ class SimpleRawAudioDataset(Dataset):
         max_files: Optional[int],
         random_seed: Optional[int],
         max_duration_seconds: Optional[float],
-    ) -> Tuple[List[dict], dict]:
+    ) -> Tuple[List[dict], dict, Optional[str]]:
         """Load audio metadata from JSONL file."""
         jsonl_file = Path(jsonl_path)
         if not jsonl_file.exists():
             raise ValueError(f"JSONL file not found: {jsonl_path}")
         
         all_entries: List[dict] = []
+        all_paths = []
         with open(jsonl_file, 'r') as f:
             for line in f:
                 if not line.strip():
@@ -179,6 +181,7 @@ class SimpleRawAudioDataset(Dataset):
                     if 'audio_path' not in entry:
                         continue
                     all_entries.append(entry)
+                    all_paths.append(entry['audio_path'])
                 except json.JSONDecodeError as e:
                     print(f"Warning: Skipping invalid JSON line: {e}")
                     continue
@@ -273,7 +276,28 @@ class SimpleRawAudioDataset(Dataset):
                 )
         
         print(f"Loaded {len(meta):,} files, generating clips...")
-        return meta, resamplers
+        
+        base_dir = None
+        if meta:
+            absolute_paths = []
+            for e in meta:
+                path_obj = Path(e['audio_path'])
+                if path_obj.is_absolute():
+                    absolute_paths.append(path_obj)
+            if absolute_paths:
+                try:
+                    common_parts = []
+                    for parts in zip(*[p.parts for p in absolute_paths]):
+                        if len(set(parts)) == 1:
+                            common_parts.append(parts[0])
+                        else:
+                            break
+                    if common_parts:
+                        base_dir = str(Path(*common_parts))
+                except (ValueError, IndexError):
+                    pass
+        
+        return meta, resamplers, base_dir
     
     def _get_audio_info_ffprobe(self, audio_path: str) -> dict:
         """Get audio metadata using ffprobe."""

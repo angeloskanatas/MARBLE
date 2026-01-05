@@ -653,6 +653,10 @@ class ExtractRepresentationsTask(BaseTask):
         else:
             dataset = datamodule.test_dataset
         
+        self._audio_dir = getattr(dataset, 'audio_dir', None)
+        if self._audio_dir:
+            self._audio_dir = Path(self._audio_dir).resolve()
+        
         original_total_samples = len(dataset)
         total_samples = original_total_samples
         subset_indices = None
@@ -800,7 +804,18 @@ class ExtractRepresentationsTask(BaseTask):
                             if aug_idx is None:
                                 base_audio_paths = audio_paths
                                 if self.save_sequence_level:
-                                    self._sample_to_audio_path.extend(base_audio_paths)
+                                    relative_paths = []
+                                    for path in base_audio_paths:
+                                        path_obj = Path(path)
+                                        if self._audio_dir and path_obj.is_absolute():
+                                            try:
+                                                rel_path = path_obj.relative_to(self._audio_dir)
+                                                relative_paths.append(rel_path.as_posix())
+                                            except ValueError:
+                                                relative_paths.append(path_obj.as_posix())
+                                        else:
+                                            relative_paths.append(path_obj.as_posix())
+                                    self._sample_to_audio_path.extend(relative_paths)
                             
                             try:
                                 encoder_output = self.encoder(waveform)
