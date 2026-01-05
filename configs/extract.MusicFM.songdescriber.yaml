@@ -1,0 +1,151 @@
+seed_everything: 1234
+ckpt_path: null  # to resume
+
+trainer:
+  fast_dev_run: false
+  accelerator: gpu
+  # strategy: ddp  # or ddp_find_unused_parameters
+  devices: [0]
+  num_nodes: 1
+  precision: bf16-mixed  # or 32, or 16, or bf16-mixed (bf16 is deprecated)
+  # no training needed for extraction, but Lightning requires these
+  max_epochs: 1
+  check_val_every_n_epoch: 1
+  num_sanity_val_steps: 0
+  log_every_n_steps: 100
+  limit_test_batches: 1  # only process 1 batch in test loop (test_step does nothing, extraction happens in on_test_start)
+
+  callbacks: []
+  logger:
+    class_path: lightning.pytorch.loggers.CSVLogger
+    init_args:
+      save_dir: "/scratch/mtg/akanatas/projects/layerbylayer/output/extracted_embeddings/musicfm_songdescriber/"
+      # save_dir: "/gpfs/projects/mtg/projects/layerbylayer/output/extracted_embeddings/musicfm_songdescriber/"
+      # save_dir: "/home/akanatas/output/extracted_embeddings/musicfm_songdescriber/"
+
+model:
+  class_path: marble.tasks.ExtractRepresentations.extract.ExtractRepresentationsTask
+  init_args:
+    sample_rate: 24000
+    use_ema: false
+
+    encoder:
+      class_path: marble.encoders.MusicFM.model.MusicFM_Encoder
+      init_args:
+        pre_trained_folder: null
+        train_mode: freeze  # just inference
+      
+    emb_transforms:
+      - class_path: marble.modules.transforms.LayerSelector
+        init_args:
+          layers: ["all"]  # extract all layers
+      - class_path: marble.modules.transforms.TimeAvgPool
+    
+    extraction:
+      split: test  # options: train, val, test
+      output_dir: /scratch/mtg/akanatas/projects/layerbylayer/output/extracted_embeddings/musicfm_songdescriber/
+      # output_dir: /gpfs/projects/mtg/projects/layerbylayer/output/extracted_embeddings/musicfm_songdescriber/
+      # output_dir: /home/akanatas/output/extracted_embeddings/musicfm_songdescriber/
+      max_samples: null  # null = all samples, or set to limit samples processed
+      # subset_fraction: 0.1  # alternative to max_samples
+      # sampling_seed: 17
+      save_frame_level: false   # frame-level embeddings (N, T, H)
+      save_sequence_level: true  # sequence-level embeddings (N, H)
+      # Note: models that DO support frame-level: MERT, MuQ, MusicFM, MusicGen, DaSheng, Xcodec, Qwen2Audio, OMAR-RQ; models that DON'T support frame-level: MuQMuLan, CLaMP3 (already pooled)
+      
+      # optional: extract multiple augmented versions of the same audio
+      augmentation:
+        num_augmentations: 2
+        seed: 42
+        transforms:
+          - PolarityInversion:
+              p: 0.5
+          - Gain:
+              min_gain_db: -6.0
+              max_gain_db: 0.0
+              p: 0.5
+          - AddGaussianNoise:
+              min_amplitude: 0.001
+              max_amplitude: 0.01
+              p: 0.6
+          - BandPassFilter:
+              min_center_freq: 200.0
+              max_center_freq: 4000.0
+              min_bandwidth_fraction: 0.6
+              max_bandwidth_fraction: 1.0
+              p: 0.25
+          - Shift:
+              min_shift: -0.1
+              max_shift: 0.1
+              rollover: true
+              p: 0.4
+          - LowPassFilter:
+              min_cutoff_freq: 3000.0
+              max_cutoff_freq: 8000.0
+              p: 0.1
+
+data:
+  class_path: marble.tasks.RawAudio.datamodule.RawAudioDataModule
+  init_args:
+    batch_size: 32
+    num_workers: 16
+
+    train:
+      class_path: marble.tasks.RawAudio.datamodule.SimpleRawAudioDataset
+      init_args:
+        audio_dir: /home/akanatas/songdescriber/audio
+        sample_rate: 24000
+        channels: 1
+        clip_seconds: 15.0
+        min_clip_ratio: 0.8  # at least 80% of the clip length
+        clips_per_file: 1
+        clip_selection_seed: 42
+        channel_mode: mix  # first, random, mix
+        extensions: ['.mp3']  # optional: specify file extensions
+        recursive: true  # optional: search recursively in subdirectories
+        max_files: null  # null = all files
+        # random_seed: 42
+        backend: "soundfile"
+        # backend: null  # optional: torchaudio backend (e.g., "soundfile", "sox_io")
+    val:
+      class_path: marble.tasks.RawAudio.datamodule.SimpleRawAudioDataset
+      init_args:
+        audio_dir: /home/akanatas/songdescriber/audio
+        sample_rate: 24000
+        channels: 1
+        clip_seconds: 15.0
+        min_clip_ratio: 0.8  # at least 80% of the clip length
+        clips_per_file: 1
+        clip_selection_seed: 42
+        channel_mode: mix  # first, random, mix
+        extensions: ['.mp3']  # optional: specify file extensions
+        recursive: true  # optional: search recursively in subdirectories
+        max_files: null  # null = all files
+        # random_seed: 42
+        backend: "soundfile"
+        # backend: null  # optional: torchaudio backend (e.g., "soundfile", "sox_io")
+    test:
+      class_path: marble.tasks.RawAudio.datamodule.SimpleRawAudioDataset
+      init_args:
+        audio_dir: /home/akanatas/songdescriber/audio
+        sample_rate: 24000
+        channels: 1
+        clip_seconds: 15.0
+        min_clip_ratio: 0.8  # at least 80% of the clip length
+        clips_per_file: 1  # one random clip per file
+        clip_selection_seed: 42
+        channel_mode: mix  # first, random, mix
+        extensions: ['.mp3']  # optional: specify file extensions
+        recursive: true  # optional: search recursively in subdirectories
+        max_files: null  # null = all files
+        # random_seed: 42
+        backend: "soundfile"
+        # backend: null  # optional: torchaudio backend (e.g., "soundfile", "sox_io")
+
+# not needed for extraction, but LightningCLI may require them
+optimizer:
+  class_path: torch.optim.Adam
+  init_args:
+    lr: 1e-3
+
+lr_scheduler: null
