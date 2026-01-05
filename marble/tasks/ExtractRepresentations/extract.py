@@ -148,6 +148,7 @@ class ExtractRepresentationsTask(BaseTask):
         self._sequence_memmaps = {}
         self._sequence_sample_idx = {}
         self._memmap_flush_interval = extraction.get('memmap_flush_interval', 100)
+        self._sample_to_audio_path = []
 
     def _build_augmentation_pipeline(self, config: dict, sample_rate: int) -> Optional['audiomentations.Compose']:
         """Build audiomentations pipeline from config.
@@ -616,6 +617,15 @@ class ExtractRepresentationsTask(BaseTask):
         
         self._sequence_memmaps.clear()
         self._sequence_sample_idx.clear()
+        
+        if hasattr(self, '_sample_to_audio_path') and self._sample_to_audio_path:
+            mapping_file = self.output_dir / "sample_to_audio_path.json"
+            with open(mapping_file, 'w') as f:
+                json.dump({
+                    'sample_to_audio_path': self._sample_to_audio_path,
+                    'num_samples': len(self._sample_to_audio_path)
+                }, f, indent=2)
+            self._sample_to_audio_path.clear()
     
     def test_step(self, batch, batch_idx: int) -> dict:
         return {}
@@ -789,6 +799,8 @@ class ExtractRepresentationsTask(BaseTask):
                             
                             if aug_idx is None:
                                 base_audio_paths = audio_paths
+                                if self.save_sequence_level:
+                                    self._sample_to_audio_path.extend(base_audio_paths)
                             
                             try:
                                 encoder_output = self.encoder(waveform)

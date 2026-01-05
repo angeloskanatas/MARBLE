@@ -41,6 +41,8 @@ class SimpleRawAudioDataset(Dataset):
         max_files: Optional[int] = None,
         random_seed: Optional[int] = None,
         max_duration_seconds: Optional[float] = None,
+        clips_per_file: Optional[int] = None,
+        clip_selection_seed: Optional[int] = None,
     ):
         """
         Args:
@@ -60,6 +62,10 @@ class SimpleRawAudioDataset(Dataset):
                       sampled before metadata loading.
             random_seed: Random seed for file sampling when max_files is set.
             max_duration_seconds: Optional maximum duration in seconds. Files exceeding this are filtered.
+            clips_per_file: Number of clips to extract per file. If None, extracts all non-overlapping clips.
+                            If 1, extracts one random clip per file. If >1, extracts that many random clips.
+            clip_selection_seed: Random seed for clip selection when clips_per_file is set.
+                                Required if clips_per_file is not None.
         """
         if (audio_dir is None) == (jsonl is None):
             raise ValueError(
@@ -88,7 +94,18 @@ class SimpleRawAudioDataset(Dataset):
         if len(self.meta) == 0:
             raise ValueError("No valid audio files found")
         
+        if clips_per_file is not None:
+            if clips_per_file <= 0:
+                raise ValueError(f"clips_per_file must be > 0, got {clips_per_file}")
+            if clip_selection_seed is None:
+                raise ValueError("clip_selection_seed is required when clips_per_file is not None")
+        
+        self.clips_per_file = clips_per_file
+        self.clip_selection_seed = clip_selection_seed
+        
         self.index_map: List[Tuple[int, int, int, int, int]] = []
+        
+        clip_rng = random.Random(clip_selection_seed) if clip_selection_seed is not None else None
         
         for file_idx, info in enumerate(self.meta):
             orig_sr = info['sample_rate']
@@ -107,10 +124,31 @@ class SimpleRawAudioDataset(Dataset):
             else:
                 n_slices = n_full
             
-            for slice_idx in range(n_slices):
+            if n_slices == 0:
+                continue
+            
+            if clips_per_file is None:
+                for slice_idx in range(n_slices):
+                    self.index_map.append(
+                        (file_idx, slice_idx, orig_sr, orig_clip_frames, orig_channels)
+                    )
+            elif clips_per_file == 1:
+                slice_idx = clip_rng.randint(0, n_slices - 1)
                 self.index_map.append(
                     (file_idx, slice_idx, orig_sr, orig_clip_frames, orig_channels)
                 )
+            else:
+                if clips_per_file > n_slices:
+                    selected_indices = list(range(n_slices))
+                else:
+                    if clip_rng is None:
+                        raise ValueError("clip_selection_seed is required when clips_per_file > 1")
+                    selected_indices = sorted(clip_rng.sample(range(n_slices), clips_per_file))
+                
+                for slice_idx in selected_indices:
+                    self.index_map.append(
+                        (file_idx, slice_idx, orig_sr, orig_clip_frames, orig_channels)
+                    )
         
         total_clips = len(self.index_map)
         valid_files = len(self.meta)
