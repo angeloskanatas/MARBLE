@@ -656,6 +656,7 @@ class ExtractRepresentationsTask(BaseTask):
         self._audio_dir = getattr(dataset, 'audio_dir', None)
         if self._audio_dir:
             self._audio_dir = Path(self._audio_dir).resolve()
+        self._computed_base_dir = None
         
         original_total_samples = len(dataset)
         total_samples = original_total_samples
@@ -807,16 +808,46 @@ class ExtractRepresentationsTask(BaseTask):
                                     relative_paths = []
                                     for path in base_audio_paths:
                                         path_obj = Path(path)
-                                        if self._audio_dir and path_obj.is_absolute():
-                                            try:
-                                                path_resolved = path_obj.resolve()
-                                                rel_path = path_resolved.relative_to(self._audio_dir)
-                                                relative_paths.append(rel_path.as_posix())
-                                            except (ValueError, OSError, RuntimeError):
+                                        if path_obj.is_absolute():
+                                            if self._audio_dir:
                                                 try:
-                                                    rel_path = path_obj.relative_to(self._audio_dir)
+                                                    path_resolved = path_obj.resolve()
+                                                    rel_path = path_resolved.relative_to(self._audio_dir)
                                                     relative_paths.append(rel_path.as_posix())
-                                                except ValueError:
+                                                except (ValueError, OSError, RuntimeError):
+                                                    try:
+                                                        rel_path = path_obj.relative_to(self._audio_dir)
+                                                        relative_paths.append(rel_path.as_posix())
+                                                    except ValueError:
+                                                        relative_paths.append(path_obj.as_posix())
+                                            else:
+                                                if self._computed_base_dir is None:
+                                                    all_paths = [str(p) for p in base_audio_paths]
+                                                    absolute_paths = [Path(p) for p in all_paths if Path(p).is_absolute()]
+                                                    if len(absolute_paths) >= 2:
+                                                        try:
+                                                            common_parts = []
+                                                            for parts in zip(*[p.parts for p in absolute_paths]):
+                                                                if len(set(parts)) == 1:
+                                                                    common_parts.append(parts[0])
+                                                                else:
+                                                                    break
+                                                            if common_parts:
+                                                                self._computed_base_dir = Path(*common_parts)
+                                                        except (ValueError, IndexError):
+                                                            pass
+                                                if self._computed_base_dir:
+                                                    try:
+                                                        path_resolved = path_obj.resolve()
+                                                        rel_path = path_resolved.relative_to(self._computed_base_dir)
+                                                        relative_paths.append(rel_path.as_posix())
+                                                    except (ValueError, OSError, RuntimeError):
+                                                        try:
+                                                            rel_path = path_obj.relative_to(self._computed_base_dir)
+                                                            relative_paths.append(rel_path.as_posix())
+                                                        except ValueError:
+                                                            relative_paths.append(path_obj.as_posix())
+                                                else:
                                                     relative_paths.append(path_obj.as_posix())
                                         else:
                                             relative_paths.append(path_obj.as_posix())
