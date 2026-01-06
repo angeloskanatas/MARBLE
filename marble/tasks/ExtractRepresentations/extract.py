@@ -819,7 +819,13 @@ class ExtractRepresentationsTask(BaseTask):
                                                         rel_path = path_obj.relative_to(self._audio_dir)
                                                         relative_paths.append(rel_path.as_posix())
                                                     except ValueError:
-                                                        relative_paths.append(path_obj.name)
+                                                        path_str = str(path_obj)
+                                                        audio_dir_str = str(self._audio_dir)
+                                                        if path_str.startswith(audio_dir_str):
+                                                            suffix = path_str[len(audio_dir_str):].lstrip('/')
+                                                            relative_paths.append(suffix if suffix else path_obj.name)
+                                                        else:
+                                                            relative_paths.append(path_obj.name)
                                             else:
                                                 if self._computed_base_dir is None:
                                                     all_paths = [str(p) for p in base_audio_paths]
@@ -846,7 +852,13 @@ class ExtractRepresentationsTask(BaseTask):
                                                             rel_path = path_obj.relative_to(self._computed_base_dir)
                                                             relative_paths.append(rel_path.as_posix())
                                                         except ValueError:
-                                                            relative_paths.append(path_obj.name)
+                                                            path_str = str(path_obj)
+                                                            base_dir_str = str(self._computed_base_dir)
+                                                            if path_str.startswith(base_dir_str):
+                                                                suffix = path_str[len(base_dir_str):].lstrip('/')
+                                                                relative_paths.append(suffix if suffix else path_obj.name)
+                                                            else:
+                                                                relative_paths.append(path_obj.name)
                                                 else:
                                                     relative_paths.append(path_obj.name)
                                         else:
