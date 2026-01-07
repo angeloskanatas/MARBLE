@@ -618,7 +618,7 @@ class ExtractRepresentationsTask(BaseTask):
         self._sequence_memmaps.clear()
         self._sequence_sample_idx.clear()
         
-        if hasattr(self, '_sample_to_audio_path') and self._sample_to_audio_path:
+        if self._sample_to_audio_path:
             mapping_file = self.output_dir / "sample_to_audio_path.json"
             with open(mapping_file, 'w') as f:
                 json.dump({
@@ -653,10 +653,6 @@ class ExtractRepresentationsTask(BaseTask):
         else:
             dataset = datamodule.test_dataset
         
-        self._audio_dir = getattr(dataset, 'audio_dir', None)
-        if self._audio_dir:
-            self._audio_dir = Path(self._audio_dir).resolve()
-        self._computed_base_dir = None
         
         original_total_samples = len(dataset)
         total_samples = original_total_samples
@@ -805,65 +801,7 @@ class ExtractRepresentationsTask(BaseTask):
                             if aug_idx is None:
                                 base_audio_paths = audio_paths
                                 if self.save_sequence_level:
-                                    relative_paths = []
-                                    for path in base_audio_paths:
-                                        path_obj = Path(path)
-                                        if path_obj.is_absolute():
-                                            if self._audio_dir:
-                                                try:
-                                                    path_resolved = path_obj.resolve()
-                                                    rel_path = path_resolved.relative_to(self._audio_dir)
-                                                    relative_paths.append(rel_path.as_posix())
-                                                except (ValueError, OSError, RuntimeError):
-                                                    try:
-                                                        rel_path = path_obj.relative_to(self._audio_dir)
-                                                        relative_paths.append(rel_path.as_posix())
-                                                    except ValueError:
-                                                        path_str = str(path_obj)
-                                                        audio_dir_str = str(self._audio_dir)
-                                                        if path_str.startswith(audio_dir_str):
-                                                            suffix = path_str[len(audio_dir_str):].lstrip('/')
-                                                            relative_paths.append(suffix if suffix else path_obj.name)
-                                                        else:
-                                                            relative_paths.append(path_obj.name)
-                                            else:
-                                                if self._computed_base_dir is None:
-                                                    all_paths = [str(p) for p in base_audio_paths]
-                                                    absolute_paths = [Path(p) for p in all_paths if Path(p).is_absolute()]
-                                                    if len(absolute_paths) >= 2:
-                                                        try:
-                                                            common_parts = []
-                                                            for parts in zip(*[p.parts for p in absolute_paths]):
-                                                                if len(set(parts)) == 1:
-                                                                    common_parts.append(parts[0])
-                                                                else:
-                                                                    break
-                                                            if common_parts:
-                                                                self._computed_base_dir = Path(*common_parts)
-                                                        except (ValueError, IndexError):
-                                                            pass
-                                                if self._computed_base_dir:
-                                                    try:
-                                                        path_resolved = path_obj.resolve()
-                                                        rel_path = path_resolved.relative_to(self._computed_base_dir)
-                                                        relative_paths.append(rel_path.as_posix())
-                                                    except (ValueError, OSError, RuntimeError):
-                                                        try:
-                                                            rel_path = path_obj.relative_to(self._computed_base_dir)
-                                                            relative_paths.append(rel_path.as_posix())
-                                                        except ValueError:
-                                                            path_str = str(path_obj)
-                                                            base_dir_str = str(self._computed_base_dir)
-                                                            if path_str.startswith(base_dir_str):
-                                                                suffix = path_str[len(base_dir_str):].lstrip('/')
-                                                                relative_paths.append(suffix if suffix else path_obj.name)
-                                                            else:
-                                                                relative_paths.append(path_obj.name)
-                                                else:
-                                                    relative_paths.append(path_obj.name)
-                                        else:
-                                            relative_paths.append(path_obj.as_posix())
-                                    self._sample_to_audio_path.extend(relative_paths)
+                                    self._sample_to_audio_path.extend(base_audio_paths)
                             
                             try:
                                 encoder_output = self.encoder(waveform)
