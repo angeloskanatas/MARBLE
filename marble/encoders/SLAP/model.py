@@ -257,10 +257,11 @@ class SLAPFeatureExtractor(BaseAudioTransform):
         x = self.logmel_extractor(x)
         x = x.type(dtype)
         
-        if x.ndim == 3:
-            x = x.unsqueeze(1)
-        elif x.ndim == 4 and x.shape[1] != 1:
-            x = x.unsqueeze(1)
+        if x.ndim == 4 and x.shape[0] == 1:
+            x = x.squeeze(0)
+        elif x.ndim == 3:
+            if x.shape[0] != 1:
+                x = x.unsqueeze(0)
         
         sample["input_features"] = x
         return sample
