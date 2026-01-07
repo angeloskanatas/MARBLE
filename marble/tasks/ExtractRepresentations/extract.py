@@ -733,59 +733,6 @@ class ExtractRepresentationsTask(BaseTask):
                 }, f, indent=2)
             self._sample_to_audio_path.clear()
     
-    def _inject_augmentation_transforms(self, datamodule) -> None:
-        """Inject augmentation transforms into datamodule before feature extractors.
-        
-        Args:
-            datamodule: DataModule instance to modify
-        """
-        if not self._use_transform_augmentation:
-            return
-        
-        split = self.split
-        if split not in ('train', 'val', 'test'):
-            return
-        
-        existing_transforms = datamodule.audio_transforms.get(split, [])
-        
-        for cfg in existing_transforms:
-            if cfg.get('class_path') == 'marble.modules.transforms.AudiomentationsTransform':
-                return
-        
-        feature_extractor_indices = []
-        for i, cfg in enumerate(existing_transforms):
-            try:
-                transform = instantiate_from_config(cfg)
-                from marble.core.base_transform import BaseAudioTransform
-                if isinstance(transform, BaseAudioTransform):
-                    class_name = transform.__class__.__name__
-                    if 'FeatureExtractor' in class_name:
-                        feature_extractor_indices.append(i)
-            except Exception:
-                class_path = cfg.get('class_path', '')
-                if 'FeatureExtractor' in class_path:
-                    feature_extractor_indices.append(i)
-        
-        if not feature_extractor_indices:
-            return
-        
-        if self.augmentation is None:
-            return
-        
-        insert_idx = feature_extractor_indices[0]
-        
-        aug_transform_cfg = {
-            'class_path': 'marble.modules.transforms.AudiomentationsTransform',
-            'init_args': {
-                'augmentation_pipeline': self.augmentation,
-                'seed': self.augmentation_seed,
-                'aug_idx': None,
-            }
-        }
-        
-        existing_transforms.insert(insert_idx, aug_transform_cfg)
-        datamodule.audio_transforms[split] = existing_transforms
-
     def test_step(self, batch, batch_idx: int) -> dict:
         return {}
     
@@ -827,7 +774,7 @@ class ExtractRepresentationsTask(BaseTask):
         use_base_dataset_for_dataloader = False
         
         if self._use_transform_augmentation:
-            if self.num_augmentations > 1:
+            if self.num_augmentations >= 1:
                 if not feature_extractors:
                     collate_fn = partial(
                         self._multiview_collate_audio_static,
@@ -848,14 +795,6 @@ class ExtractRepresentationsTask(BaseTask):
                         augmentation_seed=self.augmentation_seed,
                     )
             else:
-                self._inject_augmentation_transforms(datamodule)
-                datamodule.setup('test')
-                if self.split == 'train':
-                    dataset = datamodule.train_dataset
-                elif self.split == 'val':
-                    dataset = datamodule.val_dataset
-                else:
-                    dataset = datamodule.test_dataset
                 collate_fn = None
         else:
             collate_fn = partial(
@@ -967,9 +906,6 @@ class ExtractRepresentationsTask(BaseTask):
                                 for item in batch
                             )
                             aug_indices = [None] + list(range(self.num_augmentations))
-                        elif self._use_transform_augmentation and self.num_augmentations == 1:
-                            batches_to_process = (batch,)
-                            aug_indices = [0]
                         else:
                             batches_to_process = (batch,)
                             aug_indices = [None]
