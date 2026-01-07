@@ -8,13 +8,16 @@ import random
 import numpy as np
 import torch
 import torch.nn as nn
-from torch.utils.data import DataLoader, Subset
+from torch.utils.data import DataLoader, Dataset, Subset
 from tqdm import tqdm
 from lightning.pytorch.utilities.rank_zero import rank_zero_only
 
 from marble.core.base_task import BaseTask
 from marble.core.utils import instantiate_from_config
-from marble.modules.transforms import TimeAvgPool, TimeMaxPool, TimeLastNConcat
+from marble.modules.transforms import (
+    TimeAvgPool, TimeMaxPool, TimeLastNConcat, AudioTransformDataset,
+    _apply_audiomentations_to_waveform, MAX_AUDIO_CHANNELS
+)
 
 try:
     import audiomentations
@@ -22,7 +25,32 @@ try:
 except ImportError:
     AUDIOMENTATIONS_AVAILABLE = False
 
-MAX_AUDIO_CHANNELS = 16
+def _compute_augmentation_seed(
+    augmentation_seed: Optional[int],
+    audio_path: str,
+    dataset_idx: Optional[int],
+    aug_idx: int
+) -> Optional[int]:
+    """Compute deterministic seed for augmentation.
+    
+    Args:
+        augmentation_seed: Base seed from config
+        audio_path: Audio file path
+        dataset_idx: Original dataset index
+        aug_idx: Augmentation index
+    
+    Returns:
+        Computed seed or None if augmentation_seed is None
+    """
+    if augmentation_seed is None:
+        return None
+    
+    path_hash = int(hashlib.md5(str(audio_path).encode()).hexdigest()[:8], 16)
+    seed = augmentation_seed + path_hash
+    if dataset_idx is not None:
+        seed += dataset_idx
+    seed += aug_idx
+    return seed
 
 
 class ExtractRepresentationsTask(BaseTask):
@@ -134,12 +162,16 @@ class ExtractRepresentationsTask(BaseTask):
             self.augmentation = self._build_augmentation_pipeline(
                 augmentation_config, sample_rate
             )
+            self._augmentation_config = augmentation_config
+            self._use_transform_augmentation = True
             seed_msg = f" (seed={self.augmentation_seed})" if self.augmentation_seed is not None else ""
             print(f"Augmentations: {self.num_augmentations} per sample{seed_msg}")
         else:
             self.num_augmentations = 0
             self.augmentation = None
             self.augmentation_seed = None
+            self._augmentation_config = None
+            self._use_transform_augmentation = False
             if augmentation_config and not AUDIOMENTATIONS_AVAILABLE:
                 print("Warning: Augmentation config provided but audiomentations not installed.")
         
@@ -376,6 +408,7 @@ class ExtractRepresentationsTask(BaseTask):
         waveforms = [item[0] for item in batch]
         targets = [item[1] for item in batch]
         audio_paths = [item[2] for item in batch]
+        dataset_indices = [item[3] for item in batch] if len(batch[0]) > 3 else None
         
         waveforms_cpu = []
         for w in waveforms:
@@ -395,38 +428,18 @@ class ExtractRepresentationsTask(BaseTask):
         augmented_batches = []
         for aug_idx in range(num_augmentations):
             augmented_waveforms = []
-            for waveform, audio_path in zip(waveforms_cpu, audio_paths):
+            for i, (waveform, audio_path) in enumerate(zip(waveforms_cpu, audio_paths)):
                 try:
-                    if augmentation_seed is not None:
-                        path_hash = int(hashlib.md5(str(audio_path).encode()).hexdigest()[:8], 16)
-                        seed = augmentation_seed + path_hash + aug_idx
+                    dataset_idx = dataset_indices[i] if dataset_indices is not None else i
+                    seed = _compute_augmentation_seed(augmentation_seed, audio_path, dataset_idx, aug_idx)
+                    if seed is not None:
                         np.random.seed(seed)
                         random.seed(seed)
                     
                     waveform_np = waveform.numpy()
-                    if waveform_np.ndim == 1:
-                        augmented_np = augmentation(samples=waveform_np, sample_rate=sample_rate)
-                    elif waveform_np.ndim == 2:
-                        dim0, dim1 = waveform_np.shape
-                        
-                        if dim0 <= MAX_AUDIO_CHANNELS and dim0 < dim1:
-                            waveform_format = 'channels_first'
-                        elif dim1 <= MAX_AUDIO_CHANNELS and dim1 < dim0:
-                            waveform_format = 'channels_last'
-                        else:
-                            waveform_format = 'channels_first' if dim0 <= dim1 else 'channels_last'
-                        
-                        if waveform_format == 'channels_first':
-                            waveform_for_aug = waveform_np
-                        else:
-                            waveform_for_aug = waveform_np.T
-                        
-                        augmented_np = augmentation(samples=waveform_for_aug, sample_rate=sample_rate)
-                        
-                        if waveform_format == 'channels_last':
-                            augmented_np = augmented_np.T
-                    else:
-                        raise ValueError(f"Unexpected waveform shape: {waveform_np.shape}")
+                    augmented_np = _apply_audiomentations_to_waveform(
+                        waveform_np, augmentation, sample_rate
+                    )
                     augmented_waveforms.append(torch.from_numpy(augmented_np))
                 except (ValueError, RuntimeError, AttributeError, TypeError) as e:
                     print(f"Warning: Augmentation failed for sample, using original: {e}")
@@ -434,6 +447,99 @@ class ExtractRepresentationsTask(BaseTask):
             
             augmented_batch = (torch.stack(augmented_waveforms), targets, audio_paths)
             augmented_batches.append(augmented_batch)
+        
+        return (original_batch,) + tuple(augmented_batches)
+
+    @staticmethod
+    def _multiview_collate_with_feature_extraction(
+        batch: list,
+        base_dataset: 'Dataset',
+        feature_extractors: list,
+        augmentation: Optional['audiomentations.Compose'],
+        num_augmentations: int,
+        sample_rate: int,
+        augmentation_seed: Optional[int],
+    ) -> Tuple:
+        """Collate function that applies augmentations to waveforms before feature extractors.
+        
+        Args:
+            batch: List of (waveform, target, audio_path) tuples from base dataset
+            base_dataset: Base dataset (before transforms) - unused but kept for API consistency
+            feature_extractors: List of BaseAudioTransform instances (feature extractors only)
+            augmentation: audiomentations.Compose object
+            num_augmentations: Number of augmented versions to create
+            sample_rate: Audio sample rate
+            augmentation_seed: Base seed for deterministic augmentation
+        
+        Returns:
+            If augmentation enabled: tuple of (original_batch, aug0_batch, aug1_batch, ...)
+            If augmentation disabled: single batch tuple (features, targets, audio_paths)
+        
+        Note: All tensors are kept on CPU to support multiprocessing (num_workers > 0).
+        """
+        waveforms = [item[0] for item in batch]
+        targets = [item[1] for item in batch]
+        audio_paths = [item[2] for item in batch]
+        dataset_indices = [item[3] for item in batch] if len(batch[0]) > 3 else None
+        
+        waveforms_cpu = []
+        for w in waveforms:
+            if isinstance(w, torch.Tensor):
+                waveforms_cpu.append(w.cpu() if w.device.type != 'cpu' else w)
+            elif isinstance(w, (list, tuple, np.ndarray)):
+                waveforms_cpu.append(torch.as_tensor(w))
+            else:
+                raise ValueError(f"Expected tensor, list, tuple, or numpy array, got {type(w)}")
+        
+        if not waveforms_cpu:
+            raise ValueError("No valid waveforms found in batch")
+        
+        def apply_feature_extractors(waveform_batch: list) -> torch.Tensor:
+            """Apply feature extractors to a batch of waveforms."""
+            batch_features = []
+            for waveform in waveform_batch:
+                sample = {
+                    "input_features": waveform,
+                    "sampling_rate": sample_rate
+                }
+                for transform in feature_extractors:
+                    sample = transform(sample)
+                feature = sample["input_features"]
+                if not isinstance(feature, torch.Tensor):
+                    feature = torch.as_tensor(feature)
+                if feature.ndim == 0:
+                    feature = feature.unsqueeze(0)
+                batch_features.append(feature)
+            return torch.stack(batch_features)
+        
+        original_features = apply_feature_extractors(waveforms_cpu)
+        original_batch = (original_features, targets, audio_paths)
+        
+        if augmentation is None or num_augmentations == 0:
+            return original_batch
+        
+        augmented_batches = []
+        for aug_idx in range(num_augmentations):
+            augmented_waveforms = []
+            for i, (waveform, audio_path) in enumerate(zip(waveforms_cpu, audio_paths)):
+                try:
+                    dataset_idx = dataset_indices[i] if dataset_indices is not None else i
+                    seed = _compute_augmentation_seed(augmentation_seed, audio_path, dataset_idx, aug_idx)
+                    if seed is not None:
+                        np.random.seed(seed)
+                        random.seed(seed)
+                    
+                    waveform_np = waveform.numpy()
+                    augmented_np = _apply_audiomentations_to_waveform(
+                        waveform_np, augmentation, sample_rate
+                    )
+                    augmented_waveforms.append(torch.from_numpy(augmented_np))
+                except (ValueError, RuntimeError, AttributeError, TypeError) as e:
+                    print(f"Warning: Augmentation failed for sample, using original: {e}")
+                    augmented_waveforms.append(waveform)
+            
+            augmented_features = apply_feature_extractors(augmented_waveforms)
+            augmented_batches.append((augmented_features, targets, audio_paths))
         
         return (original_batch,) + tuple(augmented_batches)
 
@@ -627,6 +733,59 @@ class ExtractRepresentationsTask(BaseTask):
                 }, f, indent=2)
             self._sample_to_audio_path.clear()
     
+    def _inject_augmentation_transforms(self, datamodule) -> None:
+        """Inject augmentation transforms into datamodule before feature extractors.
+        
+        Args:
+            datamodule: DataModule instance to modify
+        """
+        if not self._use_transform_augmentation:
+            return
+        
+        split = self.split
+        if split not in ('train', 'val', 'test'):
+            return
+        
+        existing_transforms = datamodule.audio_transforms.get(split, [])
+        
+        for cfg in existing_transforms:
+            if cfg.get('class_path') == 'marble.modules.transforms.AudiomentationsTransform':
+                return
+        
+        feature_extractor_indices = []
+        for i, cfg in enumerate(existing_transforms):
+            try:
+                transform = instantiate_from_config(cfg)
+                from marble.core.base_transform import BaseAudioTransform
+                if isinstance(transform, BaseAudioTransform):
+                    class_name = transform.__class__.__name__
+                    if 'FeatureExtractor' in class_name:
+                        feature_extractor_indices.append(i)
+            except Exception:
+                class_path = cfg.get('class_path', '')
+                if 'FeatureExtractor' in class_path:
+                    feature_extractor_indices.append(i)
+        
+        if not feature_extractor_indices:
+            return
+        
+        if self.augmentation is None:
+            return
+        
+        insert_idx = feature_extractor_indices[0]
+        
+        aug_transform_cfg = {
+            'class_path': 'marble.modules.transforms.AudiomentationsTransform',
+            'init_args': {
+                'augmentation_pipeline': self.augmentation,
+                'seed': self.augmentation_seed,
+                'aug_idx': None,
+            }
+        }
+        
+        existing_transforms.insert(insert_idx, aug_transform_cfg)
+        datamodule.audio_transforms[split] = existing_transforms
+
     def test_step(self, batch, batch_idx: int) -> dict:
         return {}
     
@@ -638,14 +797,6 @@ class ExtractRepresentationsTask(BaseTask):
             raise RuntimeError("trainer.datamodule is required for extraction")
         datamodule = self.trainer.datamodule
         
-        collate_fn = partial(
-            self._multiview_collate_audio_static,
-            augmentation=self.augmentation,
-            num_augmentations=self.num_augmentations,
-            sample_rate=self.sample_rate,
-            augmentation_seed=self.augmentation_seed
-        )
-        
         if self.split == 'train':
             dataset = datamodule.train_dataset
         elif self.split == 'val':
@@ -653,8 +804,70 @@ class ExtractRepresentationsTask(BaseTask):
         else:
             dataset = datamodule.test_dataset
         
+        base_dataset = dataset
+        feature_extractors = []
         
-        original_total_samples = len(dataset)
+        if isinstance(dataset, AudioTransformDataset):
+            base_dataset = dataset.base
+            split = self.split
+            transform_configs = datamodule.audio_transforms.get(split, [])
+            for cfg in transform_configs:
+                try:
+                    transform = instantiate_from_config(cfg)
+                    from marble.core.base_transform import BaseAudioTransform
+                    if isinstance(transform, BaseAudioTransform):
+                        class_name = transform.__class__.__name__
+                        if 'FeatureExtractor' in class_name:
+                            feature_extractors.append(transform)
+                except Exception:
+                    class_path = cfg.get('class_path', '')
+                    if 'FeatureExtractor' in class_path:
+                        feature_extractors.append(instantiate_from_config(cfg))
+        
+        use_base_dataset_for_dataloader = False
+        
+        if self._use_transform_augmentation:
+            if self.num_augmentations > 1:
+                if not feature_extractors:
+                    collate_fn = partial(
+                        self._multiview_collate_audio_static,
+                        augmentation=self.augmentation,
+                        num_augmentations=self.num_augmentations,
+                        sample_rate=self.sample_rate,
+                        augmentation_seed=self.augmentation_seed
+                    )
+                else:
+                    use_base_dataset_for_dataloader = True
+                    collate_fn = partial(
+                        self._multiview_collate_with_feature_extraction,
+                        base_dataset=base_dataset,
+                        feature_extractors=feature_extractors,
+                        augmentation=self.augmentation,
+                        num_augmentations=self.num_augmentations,
+                        sample_rate=self.sample_rate,
+                        augmentation_seed=self.augmentation_seed,
+                    )
+            else:
+                self._inject_augmentation_transforms(datamodule)
+                datamodule.setup('test')
+                if self.split == 'train':
+                    dataset = datamodule.train_dataset
+                elif self.split == 'val':
+                    dataset = datamodule.val_dataset
+                else:
+                    dataset = datamodule.test_dataset
+                collate_fn = None
+        else:
+            collate_fn = partial(
+                self._multiview_collate_audio_static,
+                augmentation=self.augmentation,
+                num_augmentations=self.num_augmentations,
+                sample_rate=self.sample_rate,
+                augmentation_seed=self.augmentation_seed
+            )
+        
+        dataloader_dataset = base_dataset if use_base_dataset_for_dataloader else dataset
+        original_total_samples = len(dataloader_dataset)
         total_samples = original_total_samples
         subset_indices = None
         
@@ -674,6 +887,7 @@ class ExtractRepresentationsTask(BaseTask):
             total_samples = subset_size
         
         if subset_indices is not None:
+            dataloader_dataset = Subset(dataloader_dataset, subset_indices)
             dataset = Subset(dataset, subset_indices)
         
         loader_kwargs = {
@@ -681,12 +895,13 @@ class ExtractRepresentationsTask(BaseTask):
             "shuffle": False,
             "num_workers": datamodule.num_workers,
             "pin_memory": True,
-            "collate_fn": collate_fn,
         }
+        if collate_fn is not None:
+            loader_kwargs["collate_fn"] = collate_fn
         if datamodule.num_workers > 0:
             loader_kwargs["prefetch_factor"] = 2
             loader_kwargs["persistent_workers"] = True
-        dataloader = DataLoader(dataset, **loader_kwargs)
+        dataloader = DataLoader(dataloader_dataset, **loader_kwargs)
         
         batch_size = getattr(dataloader, 'batch_size', None)
         if batch_size is None:
@@ -752,6 +967,9 @@ class ExtractRepresentationsTask(BaseTask):
                                 for item in batch
                             )
                             aug_indices = [None] + list(range(self.num_augmentations))
+                        elif self._use_transform_augmentation and self.num_augmentations == 1:
+                            batches_to_process = (batch,)
+                            aug_indices = [0]
                         else:
                             batches_to_process = (batch,)
                             aug_indices = [None]

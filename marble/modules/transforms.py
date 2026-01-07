@@ -1,8 +1,10 @@
 # marble/modules/transforms.py
+import hashlib
 import random
 import re
 from typing import Sequence, Dict, Optional, Union, Tuple, List
 
+import numpy as np
 import torch
 import torchaudio
 import torch.nn as nn
@@ -10,6 +12,52 @@ import torch.nn.functional as F
 from einops import rearrange, reduce
 
 from marble.core.base_transform import BaseEmbTransform, BaseAudioTransform
+
+MAX_AUDIO_CHANNELS = 16
+
+
+def _apply_audiomentations_to_waveform(
+    waveform_np: np.ndarray,
+    augmentation: 'audiomentations.Compose',
+    sample_rate: int,
+    max_channels: int = MAX_AUDIO_CHANNELS
+) -> np.ndarray:
+    """Apply audiomentations augmentation to a numpy waveform array.
+    
+    Args:
+        waveform_np: Numpy array of shape (T,) or (C, T) or (T, C)
+        augmentation: audiomentations.Compose object
+        sample_rate: Audio sample rate
+        max_channels: Maximum expected number of audio channels
+    
+    Returns:
+        Augmented numpy array with same shape as input
+    """
+    if waveform_np.ndim == 1:
+        return augmentation(samples=waveform_np, sample_rate=sample_rate)
+    elif waveform_np.ndim == 2:
+        dim0, dim1 = waveform_np.shape
+        
+        if dim0 <= max_channels and dim0 < dim1:
+            waveform_format = 'channels_first'
+        elif dim1 <= max_channels and dim1 < dim0:
+            waveform_format = 'channels_last'
+        else:
+            waveform_format = 'channels_first' if dim0 <= dim1 else 'channels_last'
+        
+        if waveform_format == 'channels_first':
+            waveform_for_aug = waveform_np
+        else:
+            waveform_for_aug = waveform_np.T
+        
+        augmented_np = augmentation(samples=waveform_for_aug, sample_rate=sample_rate)
+        
+        if waveform_format == 'channels_last':
+            augmented_np = augmented_np.T
+        
+        return augmented_np
+    else:
+        raise ValueError(f"Unexpected waveform shape: {waveform_np.shape}")
 
 
 ############################## Audio Transforms ##############################
@@ -29,7 +77,13 @@ class AudioTransformDataset(torch.utils.data.Dataset):
         #   waveform: Tensor of shape [C, T] (or [1, T] for mono)
         #   label: any (e.g. int)
         #   path: str
-        waveform, label, path = self.base[idx]
+        #   dataset_idx: int (optional, for deterministic seeding)
+        base_item = self.base[idx]
+        if len(base_item) > 3:
+            waveform, label, path, dataset_idx = base_item
+        else:
+            waveform, label, path = base_item
+            dataset_idx = idx
 
         # ensure waveform is [C, T]
         assert waveform.ndim == 2 and waveform.shape[0] > 0, \
@@ -37,7 +91,9 @@ class AudioTransformDataset(torch.utils.data.Dataset):
 
         sample = {
             "input_features": waveform,            # Tensor [C, T]
-            "sampling_rate": self.sample_rate  # int
+            "sampling_rate": self.sample_rate,  # int
+            "audio_path": path,  # str
+            "dataset_idx": dataset_idx  # int
         }
 
         # apply each transform in sequence
@@ -123,6 +179,125 @@ class AddNoise(BaseAudioTransform):
         noise_std = rms / (10 ** (snr / 20))
         noise = torch.randn_like(waveform) * noise_std
         sample["input_features"] = waveform + noise
+        return sample
+
+
+class AudiomentationsTransform(BaseAudioTransform):
+    """Apply audiomentations augmentations to waveforms.
+    
+    Wraps audiomentations library as a BaseAudioTransform.
+    """
+    
+    def __init__(
+        self,
+        augmentation_config: Optional[dict] = None,
+        augmentation_pipeline: Optional['audiomentations.Compose'] = None,
+        sample_rate: Optional[int] = None,
+        seed: Optional[int] = None,
+        aug_idx: Optional[int] = None,
+    ):
+        """
+        Args:
+            augmentation_config: Config dict for building augmentation pipeline
+            augmentation_pipeline: Pre-built audiomentations.Compose instance (optional)
+            sample_rate: Audio sample rate (required if using augmentation_config)
+            seed: Base seed for deterministic augmentation
+            aug_idx: Augmentation index for multiview (for deterministic seeding)
+        """
+        super().__init__()
+        if augmentation_pipeline is not None:
+            self.augmentation = augmentation_pipeline
+        elif augmentation_config is not None and sample_rate is not None:
+            self.augmentation = self._build_pipeline(augmentation_config, sample_rate)
+        else:
+            raise ValueError("Must provide either augmentation_pipeline or (augmentation_config and sample_rate)")
+        self.seed = seed
+        self.aug_idx = aug_idx
+    
+    def _build_pipeline(self, config: dict, sample_rate: int) -> 'audiomentations.Compose':
+        """Build audiomentations pipeline from config."""
+        try:
+            import audiomentations
+            import inspect
+        except ImportError:
+            raise ImportError("audiomentations library is required for AudiomentationsTransform")
+        
+        from audiomentations import Compose
+        
+        transforms_list = config.get('transforms', None)
+        if transforms_list is None:
+            transforms_list = [
+                {'AddGaussianNoise': {'min_amplitude': 0.001, 'max_amplitude': 0.01, 'p': 0.8}},
+                {'TimeStretch': {'min_rate': 0.95, 'max_rate': 1.05, 'p': 0.7}},
+                {'Gain': {'min_gain_db': -3, 'max_gain_db': 3, 'p': 0.6}},
+            ]
+        
+        transforms = []
+        for aug_dict in transforms_list:
+            for aug_name, aug_params in aug_dict.items():
+                aug_module = __import__('audiomentations', fromlist=[aug_name])
+                aug_class = getattr(aug_module, aug_name)
+                
+                aug_params = aug_params.copy()
+                
+                sig = inspect.signature(aug_class.__init__)
+                valid_params = {}
+                
+                for param_name, param_value in aug_params.items():
+                    if param_name in sig.parameters:
+                        valid_params[param_name] = param_value
+                    else:
+                        print(f"Warning: {aug_name} does not accept parameter '{param_name}', skipping")
+                
+                if 'sample_rate' in sig.parameters and 'sample_rate' not in valid_params:
+                    valid_params['sample_rate'] = sample_rate
+                
+                try:
+                    transforms.append(aug_class(**valid_params))
+                except TypeError as e:
+                    raise ValueError(
+                        f"Failed to instantiate {aug_name} with parameters {valid_params}. "
+                        f"Available parameters: {list(sig.parameters.keys())}. Error: {e}"
+                    )
+        
+        return Compose(transforms)
+
+    def forward(self, sample: Dict[str, torch.Tensor]) -> Dict[str, torch.Tensor]:
+        """Apply augmentation to waveform.
+        
+        Args:
+            sample: Dict with "input_features" (waveform [C, T]), "sampling_rate", and optionally "audio_path"
+        
+        Returns:
+            Dict with augmented waveform in "input_features"
+        """
+        waveform = sample["input_features"]
+        sample_rate = sample["sampling_rate"]
+        
+        if self.seed is not None:
+            seed = self.seed
+            audio_path = sample.get("audio_path", None)
+            dataset_idx = sample.get("dataset_idx", None)
+            if audio_path is not None:
+                path_hash = int(hashlib.md5(str(audio_path).encode()).hexdigest()[:8], 16)
+                seed = seed + path_hash
+            if dataset_idx is not None:
+                seed = seed + dataset_idx
+            if self.aug_idx is not None:
+                seed += self.aug_idx
+            np.random.seed(seed)
+            random.seed(seed)
+        
+        waveform_np = waveform.detach().cpu().numpy()
+        
+        try:
+            augmented_np = _apply_audiomentations_to_waveform(
+                waveform_np, self.augmentation, sample_rate
+            )
+            sample["input_features"] = torch.from_numpy(augmented_np)
+        except (ValueError, RuntimeError, AttributeError, TypeError) as e:
+            print(f"Warning: Augmentation failed, using original waveform: {e}")
+        
         return sample
 
 

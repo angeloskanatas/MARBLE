@@ -539,7 +539,7 @@ class SimpleRawAudioDataset(Dataset):
             pad = self.clip_len_target - waveform.size(1)
             waveform = F.pad(waveform, (0, pad))
         
-        return waveform, None, path
+        return waveform, None, path, idx
 
 
 class RawAudioDataModule(BaseDataModule):
@@ -547,13 +547,14 @@ class RawAudioDataModule(BaseDataModule):
     def _collate_fn(batch):
         """Collate function that handles None targets and stacks waveforms.
         
-        Required because SimpleRawAudioDataset returns (waveform, None, path),
+        Required because SimpleRawAudioDataset returns (waveform, None, path, idx),
         and PyTorch's default_collate cannot handle None values.
         """
         waveforms = [item[0] for item in batch]
         targets = [item[1] for item in batch]
         paths = [item[2] for item in batch]
-        return torch.stack(waveforms), targets, paths
+        indices = [item[3] for item in batch] if len(batch[0]) > 3 else None
+        return torch.stack(waveforms), targets, paths, indices
     
     def test_dataloader(self):
         return DataLoader(
