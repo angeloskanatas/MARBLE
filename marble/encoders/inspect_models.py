@@ -3,6 +3,7 @@
 Extracts architecture, parameters, and configuration details for MARBLE encoders.
 """
 
+import os
 import sys
 from collections import defaultdict
 from dataclasses import dataclass
@@ -463,6 +464,96 @@ def inspect_clamp3() -> ModelInfo:
     )
 
 
+def _detect_clap_model_size_from_checkpoint(checkpoint_path: str) -> str:
+    checkpoint = torch.load(checkpoint_path, map_location="cpu", weights_only=False)
+    
+    if isinstance(checkpoint, dict) and "state_dict" in checkpoint:
+        state_dict = checkpoint["state_dict"]
+    else:
+        state_dict = checkpoint
+    
+    if state_dict and next(iter(state_dict.keys())).startswith("module."):
+        state_dict = {k[7:] if k.startswith("module.") else k: v for k, v in state_dict.items()}
+    
+    patch_embed_key = None
+    for key in state_dict.keys():
+        if "audio_branch.patch_embed.proj.weight" in key or "patch_embed.proj.weight" in key:
+            patch_embed_key = key
+            break
+    
+    if patch_embed_key:
+        embed_dim = state_dict[patch_embed_key].shape[0]
+        if embed_dim == 96:
+            return "tiny"
+        elif embed_dim == 128:
+            return "base"
+        elif embed_dim == 256:
+            return "large"
+    
+    audio_keys = [k for k in state_dict.keys() if "audio_branch" in k or "patch_embed" in k]
+    if audio_keys:
+        return "base"
+    
+    raise ValueError(f"Could not determine model size from checkpoint: {checkpoint_path}")
+
+
+def inspect_clap(checkpoint_path: Optional[str] = None, model_name: Optional[str] = None) -> ModelInfo:
+    """Inspect CLAP model.
+    
+    Args:
+        checkpoint_path: Path to CLAP checkpoint. If provided, model size will be auto-detected.
+        model_name: Model size ("tiny", "base", "large"). Required if checkpoint_path is None.
+    """
+    from marble.encoders.CLAP.model import CLAPEncoder
+    
+    if checkpoint_path:
+        detected_model_name = _detect_clap_model_size_from_checkpoint(checkpoint_path)
+        if model_name is None:
+            model_name = detected_model_name
+        elif model_name != detected_model_name:
+            print(f"Warning: Specified model_name={model_name} but checkpoint suggests {detected_model_name}. Using {detected_model_name}.", file=sys.stderr)
+            model_name = detected_model_name
+    elif model_name is None:
+        model_name = "base"  # default
+    
+    encoder = CLAPEncoder(
+        checkpoint_path=checkpoint_path,
+        train_mode="freeze",
+        precomputed_lms=True,
+        model_name=model_name,
+        enable_fusion=False,
+    )
+    arch, num_layers = get_architecture_and_layers(encoder.model, "CLAP")
+    params = count_params(encoder.model)
+    
+    if num_layers is None:
+        num_layers = encoder.N_TRANSFORMER_LAYERS
+    if arch == "Unknown":
+        arch = "Transformer"
+    
+    embed_dim = encoder.model.num_features
+    
+    # token rate: sample_rate / hop_size = 48000 / 1024 = 46.875 Hz
+    token_rate = encoder.SAMPLING_RATE / 1024.0
+    
+    variant = model_name
+    if checkpoint_path:
+        ckpt_name = os.path.basename(checkpoint_path).replace('.pt', '').replace('.pth', '')
+        variant = f"{model_name}-ckpt"
+    
+    return ModelInfo(
+        name="CLAP",
+        variant=variant,
+        architecture=arch,
+        params_m=params / 1e6,
+        sample_rate=encoder.SAMPLING_RATE,
+        token_rate=token_rate,
+        embed_dim=embed_dim,
+        num_layers=num_layers,
+        hf_id=None,
+    )
+
+
 def inspect_qwen2_audio(model_id: str = "Qwen/Qwen2-Audio-7B-Instruct") -> ModelInfo:
     """Inspect Qwen2-Audio model (base or Instruct)."""
     from marble.encoders.Qwen2AudioInstructEncoder.modeling_qwen2_audio import (
@@ -566,6 +657,22 @@ def print_table(models: list[ModelInfo]):
 def main():
     """Main inspection routine."""
     models = []
+
+    # CLAP variants
+    clap_checkpoint = "/home/akanatas/.cache/clap/music_audioset_epoch_15_esc_90.14.pt"  # ckpt
+    if os.path.exists(clap_checkpoint):
+        try:
+            models.append(inspect_clap(checkpoint_path=clap_checkpoint))
+        except Exception as e:
+            print(f"Failed to load CLAP from checkpoint: {e}", file=sys.stderr)
+    
+    for model_name in ["tiny", "base", "large"]:
+        try:
+            if model_name == "base" and os.path.exists(clap_checkpoint):
+                continue
+            models.append(inspect_clap(model_name=model_name))
+        except Exception as e:
+            print(f"Failed to load CLAP-{model_name}: {e}", file=sys.stderr)
     
     # OMAR-RQ variants
     omar_variants = [
