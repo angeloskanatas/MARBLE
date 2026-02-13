@@ -429,9 +429,7 @@ class LayerSelector(BaseEmbTransform):
     def forward(self, hidden_states: Sequence[torch.Tensor], **kwargs) -> torch.Tensor:
         # detect all layers if "all" was specified
         if self.layers is None:
-            num_layers = len(hidden_states)
-            self.layers = list(range(num_layers))
-            print(f"LayerSelector auto-detected {num_layers} layers: {self.layers}")
+            self.layers = list(range(len(hidden_states)))
         
         selected = [hidden_states[i] for i in self.layers]
         stacked = torch.stack(selected, dim=1)

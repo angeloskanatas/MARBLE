@@ -9,8 +9,7 @@ from marble.core.utils import instantiate_from_config
 
 class ProbeAudioTask(BaseTask):
     """
-    GTZAN genre probe task.  Inherits training/val logic, multi‐head,
-    losses, metrics and EMA support from BaseTask.
+    EMO arousal/valence regression probe task.
     """
 
     def __init__(
@@ -73,8 +72,10 @@ class ProbeAudioTask(BaseTask):
             info = file_dict.setdefault(fp, {"logits": [], "label": entry["label"]})
             info["logits"].append(entry["logit"])
 
+        if not file_dict:
+            return
+
         # aggregate logits and compute file-level metrics
-        print(f"Aggregating {len(file_dict)} files with per-slice outputs")
         batched_logits = []
         batched_labels = []
         for fp, info in file_dict.items():
@@ -90,6 +91,52 @@ class ProbeAudioTask(BaseTask):
             metrics_out = mc(batched_logits, batched_labels)
             self.log_dict(metrics_out, prog_bar=True, on_step=False, on_epoch=True, sync_dist=True)
             
+
+
+class ProbeOnEmbeddingsTask(ProbeAudioTask):
+    """
+    EMO probe on pre-extracted embeddings.
+    """
+
+    def __init__(
+        self,
+        sample_rate: int,
+        use_ema: bool,
+        encoder: dict,
+        emb_transforms: list[dict],
+        decoders: list[dict],
+        losses: list[dict],
+        metrics: dict[str, dict[str, dict]],
+    ):
+        enc = instantiate_from_config(encoder)
+        tfs = [instantiate_from_config(cfg) for cfg in emb_transforms]
+        decs = [instantiate_from_config(cfg) for cfg in decoders]
+        loss_fns = [instantiate_from_config(cfg) for cfg in losses]
+        metric_maps = {
+            split: {
+                name: instantiate_from_config(cfg)
+                for name, cfg in metrics[split].items()
+            }
+            for split in ("train", "val", "test")
+        }
+        super(ProbeAudioTask, self).__init__(
+            encoder=enc,
+            emb_transforms=tfs,
+            decoders=decs,
+            losses=loss_fns,
+            metrics=metric_maps,
+            sample_rate=sample_rate,
+            use_ema=use_ema,
+        )
+
+    def forward(self, x: torch.Tensor):
+        h = self.encoder(x)
+        if h.dim() == 2:
+            h = h.unsqueeze(1).unsqueeze(2)
+        for t in self.emb_transforms:
+            h = t(h)
+        outputs = [dec(h) for dec in self.decoders]
+        return outputs[0] if len(outputs) == 1 else outputs
 
 
 class SliceR2(Metric):

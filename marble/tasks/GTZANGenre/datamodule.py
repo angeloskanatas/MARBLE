@@ -1,16 +1,17 @@
 # marble/tasks/GTZANGenre/datamodule.py
 
 import json
-import random
+from pathlib import Path
 from typing import List, Tuple
 
 import torch
 import torchaudio
 import torch.nn.functional as F
-from torch.utils.data import Dataset, DataLoader
+from torch.utils.data import DataLoader, Dataset
 import lightning.pytorch as pl
 
 from marble.core.base_datamodule import BaseDataModule
+from marble.tasks.GTZANGenre.embedding_dataset import GTZANGenreEmbeddingDataset
 
 
 
@@ -172,3 +173,76 @@ class GTZANGenreAudioTest(GTZANGenreAudioVal):
 
 class GTZANGenreDataModule(BaseDataModule):
     pass
+
+
+class GTZANGenreEmbeddingDataModule(pl.LightningDataModule):
+    """
+    DataModule for probing on pre-extracted GTZAN embeddings."""
+
+    def __init__(
+        self,
+        embedding_root: str,
+        layer_idx: int,
+        train_jsonl: str,
+        val_jsonl: str,
+        test_jsonl: str,
+        batch_size: int = 8,
+        num_workers: int = 8,
+    ):
+        super().__init__()
+        self.embedding_root = Path(embedding_root)
+        self.layer_idx = layer_idx
+        self.train_jsonl = train_jsonl
+        self.val_jsonl = val_jsonl
+        self.test_jsonl = test_jsonl
+        self.batch_size = batch_size
+        self.num_workers = num_workers
+
+    def setup(self, stage: str | None = None):
+        if stage in (None, "fit"):
+            self.train_dataset = GTZANGenreEmbeddingDataset(
+                self.embedding_root / "train",
+                self.layer_idx,
+                self.train_jsonl,
+            )
+            self.val_dataset = GTZANGenreEmbeddingDataset(
+                self.embedding_root / "val",
+                self.layer_idx,
+                self.val_jsonl,
+            )
+        if stage in (None, "test", "predict"):
+            self.test_dataset = GTZANGenreEmbeddingDataset(
+                self.embedding_root / "test",
+                self.layer_idx,
+                self.test_jsonl,
+            )
+
+    def train_dataloader(self):
+        return DataLoader(
+            self.train_dataset,
+            batch_size=self.batch_size,
+            shuffle=True,
+            num_workers=self.num_workers,
+            pin_memory=True,
+            prefetch_factor=2,
+        )
+
+    def val_dataloader(self):
+        return DataLoader(
+            self.val_dataset,
+            batch_size=self.batch_size,
+            shuffle=False,
+            num_workers=self.num_workers,
+            pin_memory=True,
+            prefetch_factor=2,
+        )
+
+    def test_dataloader(self):
+        return DataLoader(
+            self.test_dataset,
+            batch_size=self.batch_size,
+            shuffle=False,
+            num_workers=self.num_workers,
+            pin_memory=True,
+            prefetch_factor=2,
+        )

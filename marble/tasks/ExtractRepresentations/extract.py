@@ -120,13 +120,15 @@ class ExtractRepresentationsTask(BaseTask):
             raise ValueError(f"split must be 'train', 'val', or 'test', got '{self.split}'")
         
         self.output_dir = Path(extraction.get('output_dir', 'output/extracted_embeddings'))
+        self.save_split_subdir = extraction.get('save_split_subdir', False)
+        self._effective_output_dir = self.output_dir / self.split if self.save_split_subdir else self.output_dir
         try:
-            self.output_dir.mkdir(parents=True, exist_ok=True)
-            test_file = self.output_dir / '.write_test'
+            self._effective_output_dir.mkdir(parents=True, exist_ok=True)
+            test_file = self._effective_output_dir / '.write_test'
             test_file.touch()
             test_file.unlink()
         except (OSError, PermissionError) as e:
-            raise ValueError(f"Cannot write to output_dir '{self.output_dir}': {e}")
+            raise ValueError(f"Cannot write to output_dir '{self._effective_output_dir}': {e}")
         
         max_samples_raw = extraction.get('max_samples')
         if max_samples_raw is not None:
@@ -557,7 +559,7 @@ class ExtractRepresentationsTask(BaseTask):
         cache_key = (layer_idx, emb_type)
         layer_dir = self._layer_dirs_cache.get(cache_key)
         if layer_dir is None:
-            layer_dir = self.output_dir / f"layer{layer_idx}" / emb_type
+            layer_dir = self._effective_output_dir / f"layer{layer_idx}" / emb_type
             layer_dir.mkdir(parents=True, exist_ok=True)
             self._layer_dirs_cache[cache_key] = layer_dir
         return layer_dir
@@ -591,7 +593,7 @@ class ExtractRepresentationsTask(BaseTask):
             layer_dirs[layer_idx] = self._get_layer_dir(layer_idx, emb_type)
         
         embeddings_cpu = {
-            layer_idx: emb[:num_samples].detach().cpu().numpy()
+            layer_idx: (emb[:num_samples].detach().cpu().float() if emb.dtype == torch.bfloat16 else emb[:num_samples].detach().cpu()).numpy()
             for layer_idx, emb in embeddings.items()
         }
         
@@ -651,7 +653,7 @@ class ExtractRepresentationsTask(BaseTask):
         aug_idx: Optional[int] = None
     ) -> None:
         embeddings_cpu = {
-            layer_idx: emb[:num_samples].detach().cpu().numpy()
+            layer_idx: (emb[:num_samples].detach().cpu().float() if emb.dtype == torch.bfloat16 else emb[:num_samples].detach().cpu()).numpy()
             for layer_idx, emb in sequence_embs.items()
         }
         self._write_sequence_embeddings_to_memmap(embeddings_cpu, num_samples, aug_idx)
@@ -725,7 +727,7 @@ class ExtractRepresentationsTask(BaseTask):
         self._sequence_sample_idx.clear()
         
         if self._sample_to_audio_path:
-            mapping_file = self.output_dir / "sample_to_audio_path.json"
+            mapping_file = self._effective_output_dir / "sample_to_audio_path.json"
             with open(mapping_file, 'w') as f:
                 json.dump({
                     'sample_to_audio_path': self._sample_to_audio_path,
@@ -743,7 +745,8 @@ class ExtractRepresentationsTask(BaseTask):
         if self.trainer is None or self.trainer.datamodule is None:
             raise RuntimeError("trainer.datamodule is required for extraction")
         datamodule = self.trainer.datamodule
-        
+        datamodule.setup(stage=None)  # comment out for extracting only 'test' split
+
         if self.split == 'train':
             dataset = datamodule.train_dataset
         elif self.split == 'val':
@@ -992,7 +995,7 @@ class ExtractRepresentationsTask(BaseTask):
                                 
                                 if sequence_embs:
                                     pending_embeddings[aug_idx] = {
-                                        layer_idx: emb[:samples_to_take].detach().cpu().numpy()
+                                        layer_idx: (emb[:samples_to_take].detach().cpu().float() if emb.dtype == torch.bfloat16 else emb[:samples_to_take].detach().cpu()).numpy()
                                         for layer_idx, emb in sequence_embs.items()
                                     }
                             

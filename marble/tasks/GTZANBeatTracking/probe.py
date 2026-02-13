@@ -270,6 +270,71 @@ class ProbeAudioTask(BaseTask):
         self.test_tempo_acc.reset()
 
 
+class ProbeOnEmbeddingsTask(ProbeAudioTask):
+    """
+    GTZAN beat-tracking probe on pre-extracted embeddings.
+    """
+
+    def __init__(
+        self,
+        sample_rate: int,
+        use_ema: bool,
+        encoder: dict,
+        emb_transforms: list[dict],
+        decoders: list[dict],
+        losses: list[dict],
+        fps: int,
+        metrics: dict,
+        loss_weights: list[float] = [1.0, 1.0, 1.0],
+    ):
+        enc = instantiate_from_config(encoder)
+        tfs = [instantiate_from_config(cfg) for cfg in emb_transforms]
+        decs = [instantiate_from_config(cfg) for cfg in decoders]
+        loss_fns = [instantiate_from_config(cfg) for cfg in losses]
+
+        metric_maps = {}
+        for split in ("val", "test"):
+            metric_maps[split] = {}
+            for name, cfg in metrics.get(split, {}).items():
+                metric_maps[split][name] = instantiate_from_config(cfg)
+
+        self.loss_weights = loss_weights
+        self.sample_rate = sample_rate
+        self.use_ema = use_ema
+        self.label_freq = fps
+        self.beat_dbn = DBNBeatTrackingProcessor(fps=self.label_freq)
+        self.dbn_dbn = DBNBeatTrackingProcessor(fps=self.label_freq)
+
+        super(ProbeAudioTask, self).__init__(
+            encoder=enc,
+            emb_transforms=tfs,
+            decoders=decs,
+            losses=loss_fns,
+            metrics={},
+            sample_rate=sample_rate,
+            use_ema=use_ema,
+        )
+
+        self.val_beat_f1 = metric_maps["val"]["beat_f1"]
+        self.val_db_f1 = metric_maps["val"]["downbeat_f1"]
+        self.val_tempo_mae = metric_maps["val"]["tempo_mae"]
+        self.val_tempo_acc = metric_maps["val"]["tempo_acc"]
+
+        self.test_beat_f1 = metric_maps["test"]["beat_f1"]
+        self.test_db_f1 = metric_maps["test"]["downbeat_f1"]
+        self.test_tempo_mae = metric_maps["test"]["tempo_mae"]
+        self.test_tempo_acc = metric_maps["test"]["tempo_acc"]
+
+    def forward(self, x: torch.Tensor):
+        h = self.encoder(x)
+        if h.dim() == 3:  # (B, T, H) -> (B, 1, T, H)
+            h = h.unsqueeze(1)
+        for t in self.emb_transforms:
+            h = t(h)
+        outputs = [dec(h) for dec in self.decoders]
+        return outputs[0] if len(outputs) == 1 else outputs
+
+
 class BeatDownbeatTempoMultitaskDecoder(nn.Module):
     """
     Multi‐task decoder for GTZAN Beat/Downbeat/Tempo Probe Task.

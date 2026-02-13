@@ -1,0 +1,110 @@
+seed_everything: 1234
+ckpt_path: null
+
+trainer:
+  fast_dev_run: false
+  accelerator: gpu
+  devices: [0]
+  num_nodes: 1
+  precision: bf16-mixed
+  max_epochs: 1
+  check_val_every_n_epoch: 1
+  num_sanity_val_steps: 0
+  log_every_n_steps: 100
+  limit_test_batches: 1
+
+  callbacks: []
+  logger:
+    class_path: lightning.pytorch.loggers.CSVLogger
+    init_args:
+      save_dir: "./output/extracted_embeddings_probing/musicgen-small_gtzan_genre/"
+
+model:
+  class_path: marble.tasks.ExtractRepresentations.extract.ExtractRepresentationsTask
+  init_args:
+    sample_rate: 32000
+    use_ema: false
+
+    encoder:
+      class_path: marble.encoders.MusicGen.model.MusicGenEncoder
+      init_args:
+        pre_trained_folder: null
+        model_size: small
+        #   - "small" (1024 hidden, 24 layers, ~300M params) - facebook/musicgen-small
+        #   - "medium" (1536 hidden, 48 layers, ~1.5B params) - facebook/musicgen-medium
+        #   - "large" (2048 hidden, 48 layers, ~3.3B params) - facebook/musicgen-large
+        train_mode: freeze
+
+    emb_transforms:
+      - class_path: marble.modules.transforms.LayerSelector
+        init_args:
+          layers: ["all"]
+      - class_path: marble.modules.transforms.TimeAvgPool
+
+    extraction:
+      split: train
+      output_dir: ./output/extracted_embeddings_probing/musicgen-small_gtzan_genre/
+      save_split_subdir: true
+      save_frame_level: false
+      save_sequence_level: true
+      max_samples: null
+
+data:
+  class_path: marble.tasks.GTZANGenre.datamodule.GTZANGenreDataModule
+  init_args:
+    batch_size: 32
+    num_workers: 16
+
+    audio_transforms:
+      train:
+        - class_path: marble.encoders.MusicGen.model.MusicGenFeatureExtractor
+          init_args:
+            pre_trained_folder: null
+            model_size: small
+            squeeze: true
+      val:
+        - class_path: marble.encoders.MusicGen.model.MusicGenFeatureExtractor
+          init_args:
+            pre_trained_folder: null
+            model_size: small
+            squeeze: true
+      test:
+        - class_path: marble.encoders.MusicGen.model.MusicGenFeatureExtractor
+          init_args:
+            pre_trained_folder: null
+            model_size: small
+            squeeze: true
+
+    train:
+      class_path: marble.tasks.GTZANGenre.datamodule.GTZANGenreAudioTrain
+      init_args:
+        sample_rate: 32000
+        channels: 1
+        clip_seconds: 30.2
+        min_clip_ratio: 0.8
+        channel_mode: first
+        jsonl: data/GTZAN/GTZANGenre.train.jsonl
+    val:
+      class_path: marble.tasks.GTZANGenre.datamodule.GTZANGenreAudioVal
+      init_args:
+        sample_rate: 32000
+        channels: 1
+        clip_seconds: 30.2
+        min_clip_ratio: 0.8
+        channel_mode: first
+        jsonl: data/GTZAN/GTZANGenre.val.jsonl
+    test:
+      class_path: marble.tasks.GTZANGenre.datamodule.GTZANGenreAudioTest
+      init_args:
+        sample_rate: 32000
+        channels: 1
+        clip_seconds: 30.2
+        min_clip_ratio: 0.8
+        channel_mode: first
+        jsonl: data/GTZAN/GTZANGenre.test.jsonl
+
+optimizer:
+  class_path: torch.optim.Adam
+  init_args:
+    lr: 1e-3
+lr_scheduler: null

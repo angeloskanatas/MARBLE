@@ -1,8 +1,39 @@
 # marble/modules/callbacks.py
+import json
 import os
 import glob
 import torch
+from pathlib import Path
 from lightning.pytorch.callbacks import Callback, ModelCheckpoint
+
+
+class LayerwiseResultsCallback(Callback):
+    """Write test metrics to a JSON file."""
+    def __init__(self, results_json: str, layer_idx: int | None = None):
+        self.results_json = Path(results_json)
+        self.layer_idx = layer_idx
+
+    def on_test_end(self, trainer, pl_module):
+        layer = self.layer_idx
+        if layer is None and hasattr(trainer.datamodule, "layer_idx"):
+            layer = trainer.datamodule.layer_idx
+        if layer is None:
+            return
+        metrics = trainer.callback_metrics
+        out = {k: float(v.item() if hasattr(v, "item") else v) for k, v in metrics.items()}
+        existing = {}
+        if self.results_json.exists():
+            try:
+                with open(self.results_json) as f:
+                    existing = json.load(f)
+            except (json.JSONDecodeError, IOError):
+                pass
+        existing[f"layer_{layer}"] = out
+        self.results_json.parent.mkdir(parents=True, exist_ok=True)
+        with open(self.results_json, "w") as f:
+            json.dump(existing, f, indent=2)
+        print(f"LayerwiseResults: layer {layer} -> {self.results_json}")
+
 
 class LoadLatestCheckpointCallback(Callback):
     """
@@ -33,10 +64,15 @@ class LoadLatestCheckpointCallback(Callback):
         map_loc = {"cpu": "cpu"}
         if pl_module.device.type == "cuda":
             map_loc = {"cuda:0": f"cuda:{pl_module.device.index or 0}"}
-        checkpoint = torch.load(latest_ckpt, map_location=map_loc)
+        try:
+            checkpoint = torch.load(latest_ckpt, map_location=map_loc, weights_only=True)
+        except TypeError:
+            checkpoint = torch.load(latest_ckpt, map_location=map_loc)
         state_dict = checkpoint.get("state_dict", checkpoint)
         pl_module.load_state_dict(state_dict)
 
         # 4) 日志告知
-        trainer.logger.log_metrics({"loaded_ckpt": os.path.basename(latest_ckpt)})
+        if trainer.logger is not None:
+            trainer.logger.log_metrics({"loaded_ckpt": os.path.basename(latest_ckpt)})
         print(f"[LoadLatestCheckpoint] loaded {latest_ckpt}")
+        
