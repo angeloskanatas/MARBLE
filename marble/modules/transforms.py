@@ -566,6 +566,96 @@ class TimeMaxPool(BaseEmbTransform):
         return reduce(x, 'b l t h -> b l 1 h', 'max')
 
 
+class TimeAttentionPool(BaseEmbTransform):
+    """
+    Attention pooling over time: Linear(in_dim, 1) scores, softmax, weighted sum.
+    """
+    def __init__(self, in_dim: int):
+        super().__init__()
+        self.in_dim = in_dim
+        self.attention = nn.Linear(in_dim, 1)
+
+    def forward(self, x: torch.Tensor, **kwargs) -> torch.Tensor:
+        """
+        Args:
+            x (Tensor): Layer‐stacked tensor of shape
+                (batch_size, num_layers, seq_len, hidden_size).
+        Returns:
+            Tensor: Attention-pooled tensor of shape
+                (batch_size, num_layers, 1, hidden_size).
+        """
+        b, l, t, h = x.shape
+        flat = rearrange(x, 'b l t h -> (b l) t h')
+        scores = self.attention(flat)
+        weights = F.softmax(scores, dim=1)
+        out = (weights * flat).sum(dim=1)
+        return rearrange(out, '(b l) h -> b l 1 h', b=b, l=l)
+
+
+class TimeQueryAttentionPool(BaseEmbTransform):
+    """
+    Query-based attention over time: learned query(ies), multi-head cross-attention,
+    then mean over queries.
+    """
+    def __init__(
+        self,
+        in_dim: int,
+        num_queries: int = 1,
+        num_heads: int = 8,
+        use_batchnorm: bool = True,
+        qkv_bias: bool = False,
+    ):
+        super().__init__()
+        if in_dim % num_heads != 0:
+            raise ValueError(f"in_dim ({in_dim}) must be divisible by num_heads ({num_heads})")
+        self.in_dim = in_dim
+        self.num_queries = num_queries
+        self.num_heads = num_heads
+        self.head_dim = in_dim // num_heads
+        self.cls_token = nn.Parameter(torch.randn(1, num_queries, in_dim) * 0.02)
+        self.k = nn.Linear(in_dim, in_dim, bias=qkv_bias)
+        self.v = nn.Linear(in_dim, in_dim, bias=qkv_bias)
+        self.use_batchnorm = use_batchnorm
+        self.bn = (
+            nn.BatchNorm1d(in_dim, affine=False, eps=1e-6)
+            if use_batchnorm
+            else nn.Identity()
+        )
+
+    def forward(self, x: torch.Tensor, **kwargs) -> torch.Tensor:
+        """
+        Args:
+            x (Tensor): Layer‐stacked tensor of shape
+                (batch_size, num_layers, seq_len, hidden_size).
+        Returns:
+            Tensor: Query-attention-pooled tensor of shape
+                (batch_size, num_layers, 1, hidden_size).
+        """
+        b, l, t, h = x.shape
+        flat = rearrange(x, 'b l t h -> (b l) t h')
+        n = flat.shape[0]
+        if self.use_batchnorm:
+            flat = self.bn(flat.permute(0, 2, 1)).permute(0, 2, 1)
+        cls_token = self.cls_token.expand(n, -1, -1)
+        q = cls_token.reshape(
+            n, self.num_queries, self.num_heads, self.head_dim
+        ).permute(0, 2, 1, 3)
+        k = (
+            self.k(flat)
+            .reshape(n, t, self.num_heads, self.head_dim)
+            .permute(0, 2, 1, 3)
+        )
+        v = (
+            self.v(flat)
+            .reshape(n, t, self.num_heads, self.head_dim)
+            .permute(0, 2, 1, 3)
+        )
+        x_cls = F.scaled_dot_product_attention(q, k, v)
+        x_cls = x_cls.transpose(1, 2).reshape(n, self.num_queries, self.in_dim)
+        x_cls = x_cls.mean(dim=1)
+        return rearrange(x_cls, '(b l) h -> b l 1 h', b=b, l=l)
+
+
 class TimeLastNConcat(BaseEmbTransform):
     """
     Concatenates the last N frames over the time dimension.
