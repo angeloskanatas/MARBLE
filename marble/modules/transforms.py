@@ -2,7 +2,10 @@
 import hashlib
 import random
 import re
-from typing import Sequence, Dict, Optional, Union, Tuple, List
+from typing import TYPE_CHECKING, Sequence, Dict, Optional, Union, Tuple, List
+
+if TYPE_CHECKING:
+    import audiomentations
 
 import numpy as np
 import torch
@@ -217,7 +220,7 @@ class AudiomentationsTransform(BaseAudioTransform):
     def _build_pipeline(self, config: dict, sample_rate: int) -> 'audiomentations.Compose':
         """Build audiomentations pipeline from config."""
         try:
-            import audiomentations
+            import audiomentations  # noqa: F401
             import inspect
         except ImportError:
             raise ImportError("audiomentations library is required for AudiomentationsTransform")
