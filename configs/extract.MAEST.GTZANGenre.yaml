@@ -17,19 +17,24 @@ trainer:
   logger:
     class_path: lightning.pytorch.loggers.CSVLogger
     init_args:
-      save_dir: "./output/extracted_embeddings_probing/muq_emo/"
+      save_dir: "./output/extracted_embeddings_probing/maest_gtzan_genre/"
 
 model:
   class_path: marble.tasks.ExtractRepresentations.extract.ExtractRepresentationsTask
   init_args:
-    sample_rate: 24000
+    sample_rate: 16000
     use_ema: false
 
     encoder:
-      class_path: marble.encoders.MuQ.model.MuQ_Encoder
+      class_path: marble.encoders.MAEST.model.MAESTEncoder
       init_args:
-        pre_trained_folder: null
+        arch: "discogs-maest-10s-pw-129e"
+        pretrained: true
+        # checkpoint: null  # path to .ckpt for custom MAEST encoder
+        # checkpoint_format: null  # "custom" for custom checkpoint (encoder under backbone.*)
         train_mode: freeze
+        distilled_type: mean
+        pooling: mean_patch  # 768-d; use concat for 2304-d
 
     emb_transforms:
       - class_path: marble.modules.transforms.LayerSelector
@@ -39,45 +44,50 @@ model:
 
     extraction:
       split: train
-      output_dir: ./output/extracted_embeddings_probing/muq_emo/
+      output_dir: ./output/extracted_embeddings_probing/maest_gtzan_genre/
       save_split_subdir: true
       save_frame_level: false
       save_sequence_level: true
       max_samples: null
 
 data:
-  class_path: marble.tasks.EMO.datamodule.EMODataModule
+  class_path: marble.tasks.GTZANGenre.datamodule.GTZANGenreDataModule
   init_args:
-    batch_size: 16
+    batch_size: 32
     num_workers: 8
 
+    audio_transforms:
+      train: []
+      val: []
+      test: []
+
     train:
-      class_path: marble.tasks.EMO.datamodule.EMOAudioTrain
+      class_path: marble.tasks.GTZANGenre.datamodule.GTZANGenreAudioTrain
       init_args:
-        sample_rate: 24000
+        sample_rate: 16000
         channels: 1
-        clip_seconds: 15
+        clip_seconds: 10.0  # match arch (10s for discogs-maest-10s-*)
         min_clip_ratio: 0.8
         channel_mode: first
-        jsonl: data/EMO/EMO.train.jsonl
+        jsonl: data/GTZAN/GTZANGenre.train.jsonl
     val:
-      class_path: marble.tasks.EMO.datamodule.EMOAudioVal
+      class_path: marble.tasks.GTZANGenre.datamodule.GTZANGenreAudioVal
       init_args:
-        sample_rate: 24000
+        sample_rate: 16000
         channels: 1
-        clip_seconds: 15
+        clip_seconds: 10.0
         min_clip_ratio: 0.8
         channel_mode: first
-        jsonl: data/EMO/EMO.val.jsonl
+        jsonl: data/GTZAN/GTZANGenre.val.jsonl
     test:
-      class_path: marble.tasks.EMO.datamodule.EMOAudioTest
+      class_path: marble.tasks.GTZANGenre.datamodule.GTZANGenreAudioTest
       init_args:
-        sample_rate: 24000
+        sample_rate: 16000
         channels: 1
-        clip_seconds: 15
+        clip_seconds: 10.0
         min_clip_ratio: 0.8
         channel_mode: first
-        jsonl: data/EMO/EMO.test.jsonl
+        jsonl: data/GTZAN/GTZANGenre.test.jsonl
 
 optimizer:
   class_path: torch.optim.Adam

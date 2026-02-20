@@ -9,6 +9,9 @@ trap cleanup EXIT
 mkdir -p "$OUT"
 
 CLIP_SECONDS=10
+NUM_SANITY_VAL_STEPS="${NUM_SANITY_VAL_STEPS:-0}"
+LIMIT_VAL_BATCHES="${LIMIT_VAL_BATCHES:-0.2}"
+LIMIT_TEST_BATCHES="${LIMIT_TEST_BATCHES:-1.0}"
 
 mapfile -t LAYERS < <(python - <<'PY'
 from pathlib import Path
@@ -70,6 +73,9 @@ PY
   cat > "$OVERRIDE" << EOF
 trainer:
   default_root_dir: $LAYER_DIR
+  num_sanity_val_steps: $NUM_SANITY_VAL_STEPS
+  limit_val_batches: $LIMIT_VAL_BATCHES
+  limit_test_batches: $LIMIT_TEST_BATCHES
   callbacks:
     - class_path: lightning.pytorch.callbacks.ModelCheckpoint
       init_args:
@@ -88,6 +94,10 @@ trainer:
 model:
   init_args:
     fps: $FPS
+    emb_transforms:
+      - class_path: marble.modules.transforms.LinearInterpolation
+        init_args:
+          target_frames: $((FPS * CLIP_SECONDS))
     decoders:
       - class_path: marble.tasks.GTZANBeatTracking.probe.BeatDownbeatTempoMultitaskDecoder
         init_args:
@@ -136,7 +146,7 @@ data:
   init_args:
     label_freq: $FPS
 EOF
-  echo "Layer $layer (in_dim=$IN_DIM, median_T=$MEDIAN_T, fps=$FPS): fit"
+  echo "Layer $layer (in_dim=$IN_DIM, median_T=$MEDIAN_T, fps=$FPS, target_frames=$((FPS * CLIP_SECONDS)), sanity=$NUM_SANITY_VAL_STEPS, limit_val=$LIMIT_VAL_BATCHES, limit_test=$LIMIT_TEST_BATCHES): fit"
   python cli.py fit -c "$CONFIG" -c "$OVERRIDE" --data.init_args.layer_idx "$layer"
   if [ -f "$CHECKPOINT_DIR/best.ckpt" ]; then
     echo "Layer $layer: test"

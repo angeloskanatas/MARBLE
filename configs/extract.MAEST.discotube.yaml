@@ -38,6 +38,8 @@ model:
         #   - "discogs-maest-20s-pw-129e" (20s)
         #   - "discogs-maest-30s-pw-129e" (30s)
         pretrained: true
+        # checkpoint: null  # path to .ckpt for custom MAEST encoder
+        # checkpoint_format: null  # "custom" for custom checkpoint (encoder under backbone.*) | null (official MAEST)
         train_mode: freeze
         distilled_type: mean
         pooling: mean_patch  # concat (2304) | cls | dist | mean_patch (768)

@@ -1,2 +1,7 @@
-rm -rf output/extracted_embeddings/musicfm_emo_test
-python cli.py test -c configs/extract.MusicFM.EMO.yaml
+set -e
+OUT=./output/extracted_embeddings_probing/musicfm_emo
+for split in train val test; do
+  echo "Extracting split: $split"
+  python cli.py test -c configs/extract.MusicFM.EMO.yaml --model.init_args.extraction.split "$split"
+done
+echo "Done. Embeddings in $OUT/{train,val,test}/layer{N}/sequence-level/"

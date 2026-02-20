@@ -1,6 +1,6 @@
 set -e
 CONFIG=configs/probe.Qwen2Audio.EMO.layerwise.yaml
-OUT=./output/probe.EMO.qwen2-audio-7B.layerwise
+OUT=./output/probe.EMO.qwen2-audio-7B.layerwise.linear
 RESULTS_JSON=$(realpath -m "$OUT/layerwise_results.json")
 OVERRIDE=$(mktemp -t marble_layer_override.XXXXXX.yaml)
 cleanup() { rm -f "$OVERRIDE"; }

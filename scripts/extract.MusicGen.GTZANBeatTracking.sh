@@ -1,5 +1,5 @@
 set -e
-OUT=./output/extracted_embeddings_probing/musicgen-small_gtzan_beattracking
+OUT=./output/extracted_embeddings_probing/musicgen-large_gtzan_beattracking
 for split in train val test; do
   echo "Extracting split: $split"
   python cli.py test -c configs/extract.MusicGen.GTZANBeatTracking.yaml --model.init_args.extraction.split "$split"

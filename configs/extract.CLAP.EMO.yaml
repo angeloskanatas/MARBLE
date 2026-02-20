@@ -17,31 +17,32 @@ trainer:
   logger:
     class_path: lightning.pytorch.loggers.CSVLogger
     init_args:
-      save_dir: "./output/extracted_embeddings_probing/mert-95M_emo/"
+      save_dir: "./output/extracted_embeddings_probing/clap_emo/"
 
 model:
   class_path: marble.tasks.ExtractRepresentations.extract.ExtractRepresentationsTask
   init_args:
-    sample_rate: 24000
+    sample_rate: 48000
     use_ema: false
 
     encoder:
-      class_path: marble.encoders.MERT.model.MERT_v1_95M_Encoder
+      class_path: marble.encoders.CLAP.model.CLAPEncoder
       init_args:
-        pre_trained_folder: null
+        checkpoint_path: /home/akanatas/.cache/clap/music_audioset_epoch_15_esc_90.14.pt
         train_mode: freeze
-        force_half: false
-        preprocess_in_forward: false
+        precomputed_lms: true
+        model_name: base
+        enable_fusion: false
+        fusion_type: "None"
 
-    emb_transforms:
-      - class_path: marble.modules.transforms.LayerSelector
-        init_args:
-          layers: ["all"]
-      - class_path: marble.modules.transforms.TimeAvgPool
+    emb_transforms: []
+    # Note: LayerSelector and TimeAvgPool are skipped for CLAP because layers have varying timesteps per layer
+    # (due to hierarchical downsampling). Sequence-level extraction pools each layer independently
+    # in _get_sequence_level_embeddings (mean pooling per layer).
 
     extraction:
       split: train
-      output_dir: ./output/extracted_embeddings_probing/mert-95M_emo/
+      output_dir: ./output/extracted_embeddings_probing/clap_emo/
       save_split_subdir: true
       save_frame_level: false
       save_sequence_level: true
@@ -55,45 +56,45 @@ data:
 
     audio_transforms:
       train:
-        - class_path: marble.encoders.MERT.model.MERT_v1_95M_FeatureExtractor
+        - class_path: marble.encoders.CLAP.model.CLAPFeatureExtractor
           init_args:
-            pre_trained_folder: null
+            precomputed_lms: false
             squeeze: true
       val:
-        - class_path: marble.encoders.MERT.model.MERT_v1_95M_FeatureExtractor
+        - class_path: marble.encoders.CLAP.model.CLAPFeatureExtractor
           init_args:
-            pre_trained_folder: null
+            precomputed_lms: false
             squeeze: true
       test:
-        - class_path: marble.encoders.MERT.model.MERT_v1_95M_FeatureExtractor
+        - class_path: marble.encoders.CLAP.model.CLAPFeatureExtractor
           init_args:
-            pre_trained_folder: null
+            precomputed_lms: false
             squeeze: true
 
     train:
       class_path: marble.tasks.EMO.datamodule.EMOAudioTrain
       init_args:
-        sample_rate: 24000
+        sample_rate: 48000
         channels: 1
-        clip_seconds: 15
+        clip_seconds: 15.0
         min_clip_ratio: 0.8
         channel_mode: first
         jsonl: data/EMO/EMO.train.jsonl
     val:
       class_path: marble.tasks.EMO.datamodule.EMOAudioVal
       init_args:
-        sample_rate: 24000
+        sample_rate: 48000
         channels: 1
-        clip_seconds: 15
+        clip_seconds: 15.0
         min_clip_ratio: 0.8
         channel_mode: first
         jsonl: data/EMO/EMO.val.jsonl
     test:
       class_path: marble.tasks.EMO.datamodule.EMOAudioTest
       init_args:
-        sample_rate: 24000
+        sample_rate: 48000
         channels: 1
-        clip_seconds: 15
+        clip_seconds: 15.0
         min_clip_ratio: 0.8
         channel_mode: first
         jsonl: data/EMO/EMO.test.jsonl

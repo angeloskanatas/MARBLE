@@ -17,21 +17,24 @@ trainer:
   logger:
     class_path: lightning.pytorch.loggers.CSVLogger
     init_args:
-      save_dir: "./output/extracted_embeddings_probing/mert-330M_emo/"
+      save_dir: "./output/extracted_embeddings_probing/maest_emo/"
 
 model:
   class_path: marble.tasks.ExtractRepresentations.extract.ExtractRepresentationsTask
   init_args:
-    sample_rate: 24000
+    sample_rate: 16000
     use_ema: false
 
     encoder:
-      class_path: marble.encoders.MERT.model.MERT_v1_330M_Encoder
+      class_path: marble.encoders.MAEST.model.MAESTEncoder
       init_args:
-        pre_trained_folder: null
+        arch: "discogs-maest-10s-pw-129e"
+        pretrained: true
+        # checkpoint: null  # path to .ckpt for custom MAEST encoder
+        # checkpoint_format: null  # "custom" for custom checkpoint (encoder under backbone.*)
         train_mode: freeze
-        force_half: false
-        preprocess_in_forward: false
+        distilled_type: mean
+        pooling: mean_patch  # 768-d; use concat for 2304-d
 
     emb_transforms:
       - class_path: marble.modules.transforms.LayerSelector
@@ -41,7 +44,7 @@ model:
 
     extraction:
       split: train
-      output_dir: ./output/extracted_embeddings_probing/mert-330M_emo/
+      output_dir: ./output/extracted_embeddings_probing/maest_emo/
       save_split_subdir: true
       save_frame_level: false
       save_sequence_level: true
@@ -54,46 +57,34 @@ data:
     num_workers: 8
 
     audio_transforms:
-      train:
-        - class_path: marble.encoders.MERT.model.MERT_v1_330M_FeatureExtractor
-          init_args:
-            pre_trained_folder: null
-            squeeze: true
-      val:
-        - class_path: marble.encoders.MERT.model.MERT_v1_330M_FeatureExtractor
-          init_args:
-            pre_trained_folder: null
-            squeeze: true
-      test:
-        - class_path: marble.encoders.MERT.model.MERT_v1_330M_FeatureExtractor
-          init_args:
-            pre_trained_folder: null
-            squeeze: true
+      train: []
+      val: []
+      test: []
 
     train:
       class_path: marble.tasks.EMO.datamodule.EMOAudioTrain
       init_args:
-        sample_rate: 24000
+        sample_rate: 16000
         channels: 1
-        clip_seconds: 15
+        clip_seconds: 10.0  # match arch (10s for discogs-maest-10s-*)
         min_clip_ratio: 0.8
         channel_mode: first
         jsonl: data/EMO/EMO.train.jsonl
     val:
       class_path: marble.tasks.EMO.datamodule.EMOAudioVal
       init_args:
-        sample_rate: 24000
+        sample_rate: 16000
         channels: 1
-        clip_seconds: 15
+        clip_seconds: 10.0
         min_clip_ratio: 0.8
         channel_mode: first
         jsonl: data/EMO/EMO.val.jsonl
     test:
       class_path: marble.tasks.EMO.datamodule.EMOAudioTest
       init_args:
-        sample_rate: 24000
+        sample_rate: 16000
         channels: 1
-        clip_seconds: 15
+        clip_seconds: 10.0
         min_clip_ratio: 0.8
         channel_mode: first
         jsonl: data/EMO/EMO.test.jsonl
