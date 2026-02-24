@@ -9,6 +9,7 @@ import torch.nn.functional as F
 import torchaudio
 import numpy as np
 import lightning.pytorch as pl
+from torch.utils.data import DataLoader
 
 from marble.core.base_datamodule import BaseDataModule, BaseAudioDataset
 from marble.utils.utils import chord_to_majmin, id2chord_str
@@ -193,3 +194,96 @@ class Chords1217AudioTest(Chords1217AudioVal):
 
 class Chords1217DataModule(BaseDataModule):
     pass
+
+
+class Chords1217EmbeddingDataModule(pl.LightningDataModule):
+    """
+    DataModule for probing on pre-extracted Chords1217 embeddings (frame-level).
+    """
+
+    def __init__(
+        self,
+        embedding_root: str,
+        layer_idx: int,
+        train_jsonl: str,
+        val_jsonl: str,
+        test_jsonl: str,
+        clip_seconds: float,
+        label_freq: int,
+        batch_size: int = 8,
+        num_workers: int = 8,
+        min_clip_ratio: float = 0.8,
+    ):
+        super().__init__()
+        from pathlib import Path
+        from marble.tasks.Chords1217.embedding_dataset import Chords1217EmbeddingDataset
+        self._dataset_cls = Chords1217EmbeddingDataset
+
+        self.embedding_root = Path(embedding_root)
+        self.layer_idx = layer_idx
+        self.train_jsonl = train_jsonl
+        self.val_jsonl = val_jsonl
+        self.test_jsonl = test_jsonl
+        self.clip_seconds = clip_seconds
+        self.label_freq = label_freq
+        self.batch_size = batch_size
+        self.num_workers = num_workers
+        self.min_clip_ratio = min_clip_ratio
+
+    def setup(self, stage: str | None = None):
+        if stage in (None, "fit"):
+            self.train_dataset = self._dataset_cls(
+                embedding_dir=self.embedding_root / "train",
+                layer_idx=self.layer_idx,
+                jsonl=self.train_jsonl,
+                clip_seconds=self.clip_seconds,
+                label_freq=self.label_freq,
+                min_clip_ratio=self.min_clip_ratio,
+            )
+            self.val_dataset = self._dataset_cls(
+                embedding_dir=self.embedding_root / "val",
+                layer_idx=self.layer_idx,
+                jsonl=self.val_jsonl,
+                clip_seconds=self.clip_seconds,
+                label_freq=self.label_freq,
+                min_clip_ratio=self.min_clip_ratio,
+            )
+        if stage in (None, "test", "predict"):
+            self.test_dataset = self._dataset_cls(
+                embedding_dir=self.embedding_root / "test",
+                layer_idx=self.layer_idx,
+                jsonl=self.test_jsonl,
+                clip_seconds=self.clip_seconds,
+                label_freq=self.label_freq,
+                min_clip_ratio=self.min_clip_ratio,
+            )
+
+    def train_dataloader(self):
+        return DataLoader(
+            self.train_dataset,
+            batch_size=self.batch_size,
+            shuffle=True,
+            num_workers=self.num_workers,
+            pin_memory=True,
+            prefetch_factor=2,
+        )
+
+    def val_dataloader(self):
+        return DataLoader(
+            self.val_dataset,
+            batch_size=self.batch_size,
+            shuffle=False,
+            num_workers=self.num_workers,
+            pin_memory=True,
+            prefetch_factor=2,
+        )
+
+    def test_dataloader(self):
+        return DataLoader(
+            self.test_dataset,
+            batch_size=self.batch_size,
+            shuffle=False,
+            num_workers=self.num_workers,
+            pin_memory=True,
+            prefetch_factor=2,
+        )

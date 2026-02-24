@@ -191,7 +191,7 @@ class ProbeAudioTask(BaseTask):
 
         if self.trainer.is_global_zero:
             print(f"Aggregating {len(file_dict)} files for '{split}' split...")
-            
+
         batched_logits = []
         batched_labels = []
         for uid, info in file_dict.items():
@@ -201,7 +201,7 @@ class ProbeAudioTask(BaseTask):
             mean_logit = arr.mean(dim=0)
             batched_logits.append(mean_logit)
             batched_labels.append(info["label"].to(self.device))
-        
+
         if not batched_logits:
             if self.trainer.is_global_zero:
                 print(f"Warning: No outputs to aggregate for '{split}' split.")
@@ -209,12 +209,58 @@ class ProbeAudioTask(BaseTask):
 
         batched_logits = torch.stack(batched_logits)
         batched_labels = torch.stack(batched_labels)
-        
+
         batched_probs = torch.sigmoid(batched_logits)
 
         mc: MetricCollection = getattr(self, f"{split}_metrics", None)
         if mc is not None:
             metrics_out = mc(batched_probs, batched_labels)
             return metrics_out # Return the dictionary
-        
+
         return None
+
+
+class ProbeOnEmbeddingsTask(ProbeAudioTask):
+    """
+    MTGMood probe on pre-extracted embeddings.
+    """
+
+    def __init__(
+        self,
+        sample_rate: int,
+        use_ema: bool,
+        encoder: dict,
+        emb_transforms: list[dict],
+        decoders: list[dict],
+        losses: list[dict],
+        metrics: dict[str, dict[str, dict]],
+    ):
+        enc = instantiate_from_config(encoder)
+        tfs = [instantiate_from_config(cfg) for cfg in emb_transforms]
+        decs = [instantiate_from_config(cfg) for cfg in decoders]
+        loss_fns = [instantiate_from_config(cfg) for cfg in losses]
+        metric_maps = {
+            split: {
+                name: instantiate_from_config(cfg)
+                for name, cfg in metrics[split].items()
+            }
+            for split in ("train", "val", "test")
+        }
+        super(ProbeAudioTask, self).__init__(
+            encoder=enc,
+            emb_transforms=tfs,
+            decoders=decs,
+            losses=loss_fns,
+            metrics=metric_maps,
+            sample_rate=sample_rate,
+            use_ema=use_ema,
+        )
+
+    def forward(self, x: torch.Tensor):
+        h = self.encoder(x)
+        if h.dim() == 2:
+            h = h.unsqueeze(1).unsqueeze(2)
+        for t in self.emb_transforms:
+            h = t(h)
+        outputs = [dec(h) for dec in self.decoders]
+        return outputs[0] if len(outputs) == 1 else outputs

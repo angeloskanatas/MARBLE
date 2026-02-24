@@ -140,3 +140,49 @@ class KeyWeightedScore(Metric):
             for ref_key, est_key in zip(labels, preds_label)
         ]
         return torch.tensor(np.mean(scores), device=preds.device)
+
+
+class ProbeOnEmbeddingsTask(ProbeAudioTask):
+    """
+    HookTheoryKey probe on pre-extracted embeddings.
+    """
+
+    def __init__(
+        self,
+        sample_rate: int,
+        use_ema: bool,
+        encoder: dict,
+        emb_transforms: list[dict],
+        decoders: list[dict],
+        losses: list[dict],
+        metrics: dict[str, dict[str, dict]],
+    ):
+        enc = instantiate_from_config(encoder)
+        tfs = [instantiate_from_config(cfg) for cfg in emb_transforms]
+        decs = [instantiate_from_config(cfg) for cfg in decoders]
+        loss_fns = [instantiate_from_config(cfg) for cfg in losses]
+        metric_maps = {
+            split: {
+                name: instantiate_from_config(cfg)
+                for name, cfg in metrics[split].items()
+            }
+            for split in ("train", "val", "test")
+        }
+        super(ProbeAudioTask, self).__init__(
+            encoder=enc,
+            emb_transforms=tfs,
+            decoders=decs,
+            losses=loss_fns,
+            metrics=metric_maps,
+            sample_rate=sample_rate,
+            use_ema=use_ema,
+        )
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        h = self.encoder(x)
+        if h.dim() == 2:
+            h = h.unsqueeze(1).unsqueeze(2)
+        for t in self.emb_transforms:
+            h = t(h)
+        outputs = [dec(h) for dec in self.decoders]
+        return outputs[0] if len(outputs) == 1 else outputs

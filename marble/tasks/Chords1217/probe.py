@@ -210,4 +210,49 @@ class ChordCrossEntropyLoss(nn.Module):
         valid_targets = flat_targets[valid_mask]  # (N,)
 
         return self.ce(valid_logits, valid_targets)
-    
+
+
+class ProbeOnEmbeddingsTask(ProbeAudioTask):
+    """
+    Chord recognition probe on pre-extracted embeddings (frame-level).
+    """
+
+    def __init__(
+        self,
+        sample_rate: int,
+        use_ema: bool,
+        encoder: dict,
+        emb_transforms: list[dict],
+        decoders: list[dict],
+        losses: list[dict],
+        metrics: dict[str, dict[str, dict]],
+    ):
+        enc = instantiate_from_config(encoder)
+        tfs = [instantiate_from_config(cfg) for cfg in emb_transforms]
+        decs = [instantiate_from_config(cfg) for cfg in decoders]
+        loss_fns = [instantiate_from_config(cfg) for cfg in losses]
+        metric_maps = {
+            split: {
+                name: instantiate_from_config(cfg)
+                for name, cfg in metrics[split].items()
+            }
+            for split in ("train", "val", "test")
+        }
+        super(ProbeAudioTask, self).__init__(
+            encoder=enc,
+            emb_transforms=tfs,
+            decoders=decs,
+            losses=loss_fns,
+            metrics=metric_maps,
+            sample_rate=sample_rate,
+            use_ema=use_ema,
+        )
+
+    def forward(self, x: torch.Tensor):
+        h = self.encoder(x)
+        if h.dim() == 3:  # (B, T, H) -> (B, 1, T, H)
+            h = h.unsqueeze(1)
+        for t in self.emb_transforms:
+            h = t(h)
+        outputs = [dec(h) for dec in self.decoders]
+        return outputs[0] if len(outputs) == 1 else outputs
