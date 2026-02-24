@@ -37,7 +37,7 @@ model:
     decoders:
       - class_path: marble.modules.decoders.MLPDecoder
         init_args:
-          in_dim: 768  # overridden per-layer in script from metadata.json (mean_patch pooling)
+          in_dim: 2304  # overridden per-layer in script from metadata.json (concat pooling)
           out_dim: 2
           hidden_layers: [512]
           activation_fn:
@@ -82,7 +82,7 @@ model:
 data:
   class_path: marble.tasks.EMO.datamodule.EMOEmbeddingDataModule
   init_args:
-    embedding_root: ./output/extracted_embeddings_probing/maest_emo/
+    embedding_root: ./output/extracted_embeddings_probing/maest-30s-discogs-pw_emo/
     layer_idx: 0
     train_jsonl: data/EMO/EMO.train.jsonl
     val_jsonl: data/EMO/EMO.val.jsonl

@@ -1,0 +1,106 @@
+seed_everything: 1234
+ckpt_path: null
+
+trainer:
+  fast_dev_run: false
+  accelerator: gpu
+  devices: [0]
+  accumulate_grad_batches: 1
+  num_nodes: 1
+  precision: bf16
+  max_epochs: 50
+  check_val_every_n_epoch: 1
+  num_sanity_val_steps: 10
+  log_every_n_steps: 5
+  callbacks:
+    - class_path: lightning.pytorch.callbacks.ModelCheckpoint
+      init_args:
+        dirpath: "checkpoints"
+        filename: "best"
+        save_top_k: 1
+    - class_path: lightning.pytorch.callbacks.early_stopping.EarlyStopping
+      init_args:
+        monitor: "val/auroc"
+        patience: 10
+        mode: "max"
+  logger: false
+
+model:
+  class_path: marble.tasks.MTT.probe.ProbeOnEmbeddingsTask
+  init_args:
+    sample_rate: 24000
+    use_ema: false
+    encoder:
+      class_path: marble.encoders.identity.model.IdentityEncoder
+      init_args: {}
+    emb_transforms: []
+    decoders:
+      - class_path: marble.modules.decoders.MLPDecoder
+        init_args:
+          in_dim: 1024
+          out_dim: 50
+          hidden_layers: [512]
+          activation_fn:
+            class_path: torch.nn.ReLU
+          dropout: 0.2
+    losses:
+      - class_path: torch.nn.BCEWithLogitsLoss
+        init_args: {}
+    metrics:
+      train:
+        f1:
+          class_path: torchmetrics.F1Score
+          init_args: { num_labels: 50, task: multilabel, average: macro }
+        f1_micro:
+          class_path: torchmetrics.F1Score
+          init_args: { num_labels: 50, task: multilabel, average: micro }
+      val:
+        f1:
+          class_path: torchmetrics.F1Score
+          init_args: { num_labels: 50, task: multilabel, average: macro }
+        auroc:
+          class_path: torchmetrics.AUROC
+          init_args: { num_labels: 50, task: multilabel, average: macro }
+        ap:
+          class_path: torchmetrics.AveragePrecision
+          init_args: { num_labels: 50, task: multilabel, average: macro }
+        f1_micro:
+          class_path: torchmetrics.F1Score
+          init_args: { num_labels: 50, task: multilabel, average: micro }
+      test:
+        f1:
+          class_path: torchmetrics.F1Score
+          init_args: { num_labels: 50, task: multilabel, average: macro }
+        f1_micro:
+          class_path: torchmetrics.F1Score
+          init_args: { num_labels: 50, task: multilabel, average: micro }
+        auroc:
+          class_path: torchmetrics.AUROC
+          init_args: { num_labels: 50, task: multilabel, average: macro }
+        ap:
+          class_path: torchmetrics.AveragePrecision
+          init_args: { num_labels: 50, task: multilabel, average: macro }
+
+data:
+  class_path: marble.tasks.MTT.datamodule.MTTEmbeddingDataModule
+  init_args:
+    embedding_root: ./output/extracted_embeddings_probing/mert-330M_mtt/
+    layer_idx: 0
+    train_jsonl: data/MTT/MTT.train.jsonl
+    val_jsonl: data/MTT/MTT.val.jsonl
+    test_jsonl: data/MTT/MTT.test.jsonl
+    batch_size: 32
+    num_workers: 8
+
+optimizer:
+  class_path: torch.optim.Adam
+  init_args:
+    lr: 1e-3
+
+lr_scheduler:
+  class_path: lightning.pytorch.cli.ReduceLROnPlateau
+  init_args:
+    mode: "max"
+    factor: 0.5
+    patience: 3
+    monitor: "val/auroc"

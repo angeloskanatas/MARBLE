@@ -1,0 +1,95 @@
+seed_everything: 1234
+ckpt_path: null
+
+trainer:
+  fast_dev_run: false
+  accelerator: gpu
+  devices: [0]
+  accumulate_grad_batches: 4
+  num_nodes: 1
+  precision: bf16
+  max_epochs: 50
+  check_val_every_n_epoch: 1
+  num_sanity_val_steps: 10
+  log_every_n_steps: 5
+  callbacks:
+    - class_path: lightning.pytorch.callbacks.ModelCheckpoint
+      init_args:
+        dirpath: "checkpoints"
+        filename: "best"
+        save_top_k: 1
+    - class_path: lightning.pytorch.callbacks.early_stopping.EarlyStopping
+      init_args:
+        monitor: "val/weighted_score"
+        patience: 20
+        mode: "max"
+  logger: false
+
+model:
+  class_path: marble.tasks.GS.probe.ProbeOnEmbeddingsTask
+  init_args:
+    sample_rate: 16000  # base/multicodebook: 16k; multifeature/multifeature-25hz: 24k
+    use_ema: false
+    encoder:
+      class_path: marble.encoders.identity.model.IdentityEncoder
+      init_args: {}
+    emb_transforms: []
+    decoders:
+      - class_path: marble.modules.decoders.MLPDecoder
+        init_args:
+          in_dim: 1024
+          out_dim: 24
+          hidden_layers: [512]
+          activation_fn:
+            class_path: torch.nn.ReLU
+          dropout: 0.2
+    losses:
+      - class_path: torch.nn.CrossEntropyLoss
+        init_args:
+          reduction: mean
+    metrics:
+      train:
+        acc:
+          class_path: torchmetrics.Accuracy
+          init_args: { num_classes: 24, task: multiclass }
+        weighted_score:
+          class_path: marble.tasks.GS.probe.KeyWeightedScore
+          init_args: {}
+      val:
+        acc:
+          class_path: torchmetrics.Accuracy
+          init_args: { num_classes: 24, task: multiclass }
+        weighted_score:
+          class_path: marble.tasks.GS.probe.KeyWeightedScore
+          init_args: {}
+      test:
+        acc:
+          class_path: torchmetrics.Accuracy
+          init_args: { num_classes: 24, task: multiclass }
+        weighted_score:
+          class_path: marble.tasks.GS.probe.KeyWeightedScore
+          init_args: {}
+
+data:
+  class_path: marble.tasks.GS.datamodule.GSEmbeddingDataModule
+  init_args:
+    embedding_root: ./output/extracted_embeddings_probing/omar-rq-base_gs/  # switch path when model_id/variant changes
+    layer_idx: 0
+    train_jsonl: data/GS/GS.train.jsonl
+    val_jsonl: data/GS/GS.val.jsonl
+    test_jsonl: data/GS/GS.test.jsonl
+    batch_size: 16
+    num_workers: 8
+
+optimizer:
+  class_path: torch.optim.Adam
+  init_args:
+    lr: 1e-3
+
+lr_scheduler:
+  class_path: lightning.pytorch.cli.ReduceLROnPlateau
+  init_args:
+    mode: "max"
+    factor: 0.1
+    patience: 5
+    monitor: "val/weighted_score"

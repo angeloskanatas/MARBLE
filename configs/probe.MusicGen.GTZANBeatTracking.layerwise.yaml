@@ -7,7 +7,7 @@ trainer:
   devices: [0]
   accumulate_grad_batches: 8
   num_nodes: 1
-  precision: bf16
+  precision: 32-true
   max_epochs: 50
   check_val_every_n_epoch: 1
   num_sanity_val_steps: 10
@@ -44,7 +44,7 @@ model:
           joint_decoder:
             class_path: marble.modules.decoders.MLPDecoderKeepTime
             init_args:
-              in_dim: 1024  # medium: 1536; large: 2048
+              in_dim: 2048  # medium: 1536; large: 2048
               out_dim: 3
               hidden_layers: [512]
               activation_fn:
@@ -96,7 +96,7 @@ model:
 data:
   class_path: marble.tasks.GTZANBeatTracking.datamodule.GTZANBeatTrackingEmbeddingDataModule
   init_args:
-    embedding_root: ./output/extracted_embeddings_probing/musicgen-small_gtzan_beattracking/
+    embedding_root: ./output/extracted_embeddings_probing/musicgen-large_gtzan_beattracking/
     layer_idx: 0
     train_jsonl: data/GTZAN/GTZANBeatTracking.train.jsonl
     val_jsonl: data/GTZAN/GTZANBeatTracking.val.jsonl

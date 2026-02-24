@@ -37,7 +37,7 @@ model:
     decoders:
       - class_path: marble.modules.decoders.MLPDecoder
         init_args:
-          in_dim: 768  # overridden per-layer in script from metadata.json (mean_patch pooling)
+          in_dim: 2304  # overridden per-layer in script from metadata.json (concat pooling)
           out_dim: 10
           hidden_layers: [512]
           activation_fn:
@@ -64,7 +64,7 @@ model:
 data:
   class_path: marble.tasks.GTZANGenre.datamodule.GTZANGenreEmbeddingDataModule
   init_args:
-    embedding_root: ./output/extracted_embeddings_probing/maest_gtzan_genre/
+    embedding_root: ./output/extracted_embeddings_probing/lejepa-maest-10s-gtzan_genre/
     layer_idx: 0
     train_jsonl: data/GTZAN/GTZANGenre.train.jsonl
     val_jsonl: data/GTZAN/GTZANGenre.val.jsonl
