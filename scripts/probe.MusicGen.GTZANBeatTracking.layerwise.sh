@@ -2,7 +2,7 @@ set -e
 # small: 25 layers; medium/large: 49 layers
 NUM_LAYERS="${NUM_LAYERS:-49}"
 CONFIG=configs/probe.MusicGen.GTZANBeatTracking.layerwise.yaml
-OUT=./output/probe.GTZANBeatTracking.musicgen-large.layerwise.linear
+OUT=./output/probe.GTZANBeatTracking.musicgen-large.layerwise
 RESULTS_JSON=$(realpath -m "$OUT/layerwise_results.json")
 OVERRIDE=$(mktemp -t marble_layer_override.XXXXXX.yaml)
 cleanup() { rm -f "$OVERRIDE"; }

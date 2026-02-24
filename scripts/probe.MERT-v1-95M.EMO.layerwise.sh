@@ -1,6 +1,6 @@
 set -e
 CONFIG=configs/probe.MERT-v1-95M.EMO.layerwise.yaml
-OUT=./output/probe.EMO.mert-95M.layerwise.linear
+OUT=./output/probe.EMO.mert-95M.layerwise
 RESULTS_JSON=$(realpath -m "$OUT/layerwise_results.json")
 OVERRIDE=$(mktemp -t marble_layer_override.XXXXXX.yaml)
 cleanup() { rm -f "$OVERRIDE"; }
