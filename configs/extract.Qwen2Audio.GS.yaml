@@ -17,8 +17,7 @@ trainer:
   logger:
     class_path: lightning.pytorch.loggers.CSVLogger
     init_args:
-      # save_dir: "./output/extracted_embeddings_probing/maest-30s-discogs-pw_gtzan_genre/"
-      save_dir: "./output/extracted_embeddings_probing/lejepa-maest-10s-gtzan_genre/"
+      save_dir: "./output/extracted_embeddings_probing/qwen2-audio-7B_gs/"
 
 model:
   class_path: marble.tasks.ExtractRepresentations.extract.ExtractRepresentationsTask
@@ -27,15 +26,11 @@ model:
     use_ema: false
 
     encoder:
-      class_path: marble.encoders.MAEST.model.MAESTEncoder
+      class_path: marble.encoders.Qwen2AudioInstructEncoder.model.Qwen2AudioInstructEncoder
       init_args:
-        arch: "discogs-maest-10s-pw-129e"
-        pretrained: true
-        checkpoint: "/home/akanatas/projects/music-jepa/music-jepa/checkpoints/lejepa_maest_proj64_6views/last.ckpt"  # path to .ckpt for custom MAEST encoder
-        checkpoint_format: "custom"  # "custom" for custom checkpoint (encoder under backbone.*)
+        pre_trained_folder: "Qwen/Qwen2-Audio-7B"
         train_mode: freeze
-        distilled_type: mean
-        pooling: concat  # 768-d; use concat for 2304-d
+        attn_implementation: eager
 
     emb_transforms:
       - class_path: marble.modules.transforms.LayerSelector
@@ -45,50 +40,62 @@ model:
 
     extraction:
       split: train
-      output_dir: ./output/extracted_embeddings_probing/lejepa-maest-10s-gtzan_genre/
+      output_dir: ./output/extracted_embeddings_probing/qwen2-audio-7B_gs/
       save_split_subdir: true
       save_frame_level: false
       save_sequence_level: true
       max_samples: null
 
 data:
-  class_path: marble.tasks.GTZANGenre.datamodule.GTZANGenreDataModule
+  class_path: marble.tasks.GS.datamodule.GSDataModule
   init_args:
-    batch_size: 4
+    batch_size: 16
     num_workers: 8
 
     audio_transforms:
-      train: []
-      val: []
-      test: []
+      train:
+        - class_path: marble.encoders.Qwen2AudioInstructEncoder.model.Qwen2AudioInstructFeatureExtractor
+          init_args:
+            pre_trained_folder: "Qwen/Qwen2-Audio-7B"
+            squeeze: true
+      val:
+        - class_path: marble.encoders.Qwen2AudioInstructEncoder.model.Qwen2AudioInstructFeatureExtractor
+          init_args:
+            pre_trained_folder: "Qwen/Qwen2-Audio-7B"
+            squeeze: true
+      test:
+        - class_path: marble.encoders.Qwen2AudioInstructEncoder.model.Qwen2AudioInstructFeatureExtractor
+          init_args:
+            pre_trained_folder: "Qwen/Qwen2-Audio-7B"
+            squeeze: true
 
     train:
-      class_path: marble.tasks.GTZANGenre.datamodule.GTZANGenreAudioTrain
+      class_path: marble.tasks.GS.datamodule.GSAudioTrain
       init_args:
         sample_rate: 16000
         channels: 1
-        clip_seconds: 10.0  # match arch (10s for discogs-maest-10s-*)
+        clip_seconds: 30
         min_clip_ratio: 0.8
         channel_mode: first
-        jsonl: data/GTZAN/GTZANGenre.train.jsonl
+        jsonl: data/GS/GS.train.jsonl
     val:
-      class_path: marble.tasks.GTZANGenre.datamodule.GTZANGenreAudioVal
+      class_path: marble.tasks.GS.datamodule.GSAudioVal
       init_args:
         sample_rate: 16000
         channels: 1
-        clip_seconds: 10.0
+        clip_seconds: 30
         min_clip_ratio: 0.8
         channel_mode: first
-        jsonl: data/GTZAN/GTZANGenre.val.jsonl
+        jsonl: data/GS/GS.val.jsonl
     test:
-      class_path: marble.tasks.GTZANGenre.datamodule.GTZANGenreAudioTest
+      class_path: marble.tasks.GS.datamodule.GSAudioTest
       init_args:
         sample_rate: 16000
         channels: 1
-        clip_seconds: 10.0
+        clip_seconds: 30
         min_clip_ratio: 0.8
         channel_mode: first
-        jsonl: data/GTZAN/GTZANGenre.test.jsonl
+        jsonl: data/GS/GS.test.jsonl
 
 optimizer:
   class_path: torch.optim.Adam

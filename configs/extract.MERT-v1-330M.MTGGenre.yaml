@@ -17,23 +17,21 @@ trainer:
   logger:
     class_path: lightning.pytorch.loggers.CSVLogger
     init_args:
-      save_dir: "./output/extracted_embeddings_probing/musicgen-small_gtzan_genre/"
+      save_dir: "./output/extracted_embeddings_probing/mert-330M_mtg_genre/"
 
 model:
   class_path: marble.tasks.ExtractRepresentations.extract.ExtractRepresentationsTask
   init_args:
-    sample_rate: 32000
+    sample_rate: 24000
     use_ema: false
 
     encoder:
-      class_path: marble.encoders.MusicGen.model.MusicGenEncoder
+      class_path: marble.encoders.MERT.model.MERT_v1_330M_Encoder
       init_args:
         pre_trained_folder: null
-        model_size: small
-        #   - "small" (1024 hidden, 24 layers, ~300M params) - facebook/musicgen-small
-        #   - "medium" (1536 hidden, 48 layers, ~1.5B params) - facebook/musicgen-medium
-        #   - "large" (2048 hidden, 48 layers, ~3.3B params) - facebook/musicgen-large
         train_mode: freeze
+        force_half: false
+        preprocess_in_forward: false
 
     emb_transforms:
       - class_path: marble.modules.transforms.LayerSelector
@@ -43,65 +41,65 @@ model:
 
     extraction:
       split: train
-      output_dir: ./output/extracted_embeddings_probing/musicgen-small_gtzan_genre/
+      output_dir: ./output/extracted_embeddings_probing/mert-330M_mtg_genre/
       save_split_subdir: true
       save_frame_level: false
       save_sequence_level: true
       max_samples: null
 
 data:
-  class_path: marble.tasks.GTZANGenre.datamodule.GTZANGenreDataModule
+  class_path: marble.tasks.MTGGenre.datamodule.MTGGenreDataModule
   init_args:
     batch_size: 16
-    num_workers: 16
+    num_workers: 8
 
     audio_transforms:
       train:
-        - class_path: marble.encoders.MusicGen.model.MusicGenFeatureExtractor
+        - class_path: marble.encoders.MERT.model.MERT_v1_330M_FeatureExtractor
           init_args:
             pre_trained_folder: null
-            model_size: small
             squeeze: true
       val:
-        - class_path: marble.encoders.MusicGen.model.MusicGenFeatureExtractor
+        - class_path: marble.encoders.MERT.model.MERT_v1_330M_FeatureExtractor
           init_args:
             pre_trained_folder: null
-            model_size: small
             squeeze: true
       test:
-        - class_path: marble.encoders.MusicGen.model.MusicGenFeatureExtractor
+        - class_path: marble.encoders.MERT.model.MERT_v1_330M_FeatureExtractor
           init_args:
             pre_trained_folder: null
-            model_size: small
             squeeze: true
 
     train:
-      class_path: marble.tasks.GTZANGenre.datamodule.GTZANGenreAudioTrain
+      class_path: marble.tasks.MTGGenre.datamodule.MTGGenreAudioTrain
       init_args:
-        sample_rate: 32000
+        sample_rate: 24000
         channels: 1
-        clip_seconds: 30.2
+        clip_seconds: 30
         min_clip_ratio: 0.8
-        channel_mode: first
-        jsonl: data/GTZAN/GTZANGenre.train.jsonl
+        channel_mode: mix
+        jsonl: data/MTG/MTGGenre.train.jsonl
+        backend: "soundfile"
     val:
-      class_path: marble.tasks.GTZANGenre.datamodule.GTZANGenreAudioVal
+      class_path: marble.tasks.MTGGenre.datamodule.MTGGenreAudioVal
       init_args:
-        sample_rate: 32000
+        sample_rate: 24000
         channels: 1
-        clip_seconds: 30.2
+        clip_seconds: 30
         min_clip_ratio: 0.8
-        channel_mode: first
-        jsonl: data/GTZAN/GTZANGenre.val.jsonl
+        channel_mode: mix
+        jsonl: data/MTG/MTGGenre.val.jsonl
+        backend: "soundfile"
     test:
-      class_path: marble.tasks.GTZANGenre.datamodule.GTZANGenreAudioTest
+      class_path: marble.tasks.MTGGenre.datamodule.MTGGenreAudioTest
       init_args:
-        sample_rate: 32000
+        sample_rate: 24000
         channels: 1
-        clip_seconds: 30.2
+        clip_seconds: 30
         min_clip_ratio: 0.8
-        channel_mode: first
-        jsonl: data/GTZAN/GTZANGenre.test.jsonl
+        channel_mode: mix
+        jsonl: data/MTG/MTGGenre.test.jsonl
+        backend: "soundfile"
 
 optimizer:
   class_path: torch.optim.Adam

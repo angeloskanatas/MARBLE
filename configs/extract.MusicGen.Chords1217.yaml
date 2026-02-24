@@ -17,7 +17,7 @@ trainer:
   logger:
     class_path: lightning.pytorch.loggers.CSVLogger
     init_args:
-      save_dir: "./output/extracted_embeddings_probing/musicgen-large_gtzan_beattracking/"
+      save_dir: "./output/extracted_embeddings_probing/musicgen-small_chords1217/"
 
 model:
   class_path: marble.tasks.ExtractRepresentations.extract.ExtractRepresentationsTask
@@ -29,7 +29,7 @@ model:
       class_path: marble.encoders.MusicGen.model.MusicGenEncoder
       init_args:
         pre_trained_folder: null
-        model_size: large
+        model_size: small
         #   - "small" (1024 hidden, 24 layers, ~300M params) - facebook/musicgen-small
         #   - "medium" (1536 hidden, 48 layers, ~1.5B params) - facebook/musicgen-medium
         #   - "large" (2048 hidden, 48 layers, ~3.3B params) - facebook/musicgen-large
@@ -42,16 +42,16 @@ model:
 
     extraction:
       split: train
-      output_dir: ./output/extracted_embeddings_probing/musicgen-large_gtzan_beattracking/
+      output_dir: ./output/extracted_embeddings_probing/musicgen-small_chords1217/
       save_split_subdir: true
       save_frame_level: true
       save_sequence_level: false
       max_samples: null
 
 data:
-  class_path: marble.tasks.GTZANBeatTracking.datamodule.GTZANBeatTrackingDataModule
+  class_path: marble.tasks.Chords1217.datamodule.Chords1217DataModule
   init_args:
-    batch_size: 12
+    batch_size: 16
     num_workers: 8
 
     audio_transforms:
@@ -59,54 +59,63 @@ data:
         - class_path: marble.encoders.MusicGen.model.MusicGenFeatureExtractor
           init_args:
             pre_trained_folder: null
-            model_size: large
+            model_size: small
+        #   - "small" (1024 hidden, 24 layers, ~300M params) - facebook/musicgen-small
+        #   - "medium" (1536 hidden, 48 layers, ~1.5B params) - facebook/musicgen-medium
+        #   - "large" (2048 hidden, 48 layers, ~3.3B params) - facebook/musicgen-large
             squeeze: true
       val:
         - class_path: marble.encoders.MusicGen.model.MusicGenFeatureExtractor
           init_args:
             pre_trained_folder: null
-            model_size: large
+            model_size: small
+        #   - "small" (1024 hidden, 24 layers, ~300M params) - facebook/musicgen-small
+        #   - "medium" (1536 hidden, 48 layers, ~1.5B params) - facebook/musicgen-medium
+        #   - "large" (2048 hidden, 48 layers, ~3.3B params) - facebook/musicgen-large
             squeeze: true
       test:
         - class_path: marble.encoders.MusicGen.model.MusicGenFeatureExtractor
           init_args:
             pre_trained_folder: null
-            model_size: large
+            model_size: small
+        #   - "small" (1024 hidden, 24 layers, ~300M params) - facebook/musicgen-small
+        #   - "medium" (1536 hidden, 48 layers, ~1.5B params) - facebook/musicgen-medium
+        #   - "large" (2048 hidden, 48 layers, ~3.3B params) - facebook/musicgen-large
             squeeze: true
 
     train:
-      class_path: marble.tasks.GTZANBeatTracking.datamodule.GTZANBeatTrackingAudioTrain
+      class_path: marble.tasks.Chords1217.datamodule.Chords1217AudioTrain
       init_args:
         sample_rate: 32000
         channels: 1
-        clip_seconds: 10
-        min_clip_ratio: 0.8
-        channel_mode: first
-        jsonl: data/GTZAN/GTZANBeatTracking.train.jsonl
+        clip_seconds: 15
+        min_clip_ratio: 0.1
+        channel_mode: random
+        jsonl: data/Chords1217/Chords1217.train.jsonl
         label_freq: 50
-        num_neighbors: 2
+        backend: "soundfile"
     val:
-      class_path: marble.tasks.GTZANBeatTracking.datamodule.GTZANBeatTrackingAudioVal
+      class_path: marble.tasks.Chords1217.datamodule.Chords1217AudioVal
       init_args:
         sample_rate: 32000
         channels: 1
-        clip_seconds: 10
-        min_clip_ratio: 0.8
-        channel_mode: first
-        jsonl: data/GTZAN/GTZANBeatTracking.val.jsonl
+        clip_seconds: 15
+        min_clip_ratio: 0.1
+        channel_mode: mix
+        jsonl: data/Chords1217/Chords1217.val.jsonl
         label_freq: 50
-        num_neighbors: 0
+        backend: "soundfile"
     test:
-      class_path: marble.tasks.GTZANBeatTracking.datamodule.GTZANBeatTrackingAudioTest
+      class_path: marble.tasks.Chords1217.datamodule.Chords1217AudioTest
       init_args:
         sample_rate: 32000
         channels: 1
-        clip_seconds: 10
-        min_clip_ratio: 0.8
-        channel_mode: first
-        jsonl: data/GTZAN/GTZANBeatTracking.test.jsonl
+        clip_seconds: 15
+        min_clip_ratio: 0.1
+        channel_mode: mix
+        jsonl: data/Chords1217/Chords1217.test.jsonl
         label_freq: 50
-        num_neighbors: 0
+        backend: "soundfile"
 
 optimizer:
   class_path: torch.optim.Adam

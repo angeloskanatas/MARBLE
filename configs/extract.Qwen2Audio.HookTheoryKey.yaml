@@ -1,0 +1,107 @@
+seed_everything: 1234
+ckpt_path: null
+
+trainer:
+  fast_dev_run: false
+  accelerator: gpu
+  devices: [0]
+  num_nodes: 1
+  precision: bf16-mixed
+  max_epochs: 1
+  check_val_every_n_epoch: 1
+  num_sanity_val_steps: 0
+  log_every_n_steps: 100
+  limit_test_batches: 1
+
+  callbacks: []
+  logger:
+    class_path: lightning.pytorch.loggers.CSVLogger
+    init_args:
+      save_dir: "./output/extracted_embeddings_probing/qwen2-audio-7B_hooktheory_key/"
+
+model:
+  class_path: marble.tasks.ExtractRepresentations.extract.ExtractRepresentationsTask
+  init_args:
+    sample_rate: 16000
+    use_ema: false
+
+    encoder:
+      class_path: marble.encoders.Qwen2AudioInstructEncoder.model.Qwen2AudioInstructEncoder
+      init_args:
+        pre_trained_folder: "Qwen/Qwen2-Audio-7B"
+        train_mode: freeze
+        attn_implementation: eager
+
+    emb_transforms:
+      - class_path: marble.modules.transforms.LayerSelector
+        init_args:
+          layers: ["all"]
+      - class_path: marble.modules.transforms.TimeAvgPool
+
+    extraction:
+      split: train
+      output_dir: ./output/extracted_embeddings_probing/qwen2-audio-7B_hooktheory_key/
+      save_split_subdir: true
+      save_frame_level: false
+      save_sequence_level: true
+      max_samples: null
+
+data:
+  class_path: marble.tasks.HookTheoryKey.datamodule.HookTheoryKeyDataModule
+  init_args:
+    batch_size: 16
+    num_workers: 8
+
+    audio_transforms:
+      train:
+        - class_path: marble.encoders.Qwen2AudioInstructEncoder.model.Qwen2AudioInstructFeatureExtractor
+          init_args:
+            pre_trained_folder: "Qwen/Qwen2-Audio-7B"
+            squeeze: true
+      val:
+        - class_path: marble.encoders.Qwen2AudioInstructEncoder.model.Qwen2AudioInstructFeatureExtractor
+          init_args:
+            pre_trained_folder: "Qwen/Qwen2-Audio-7B"
+            squeeze: true
+      test:
+        - class_path: marble.encoders.Qwen2AudioInstructEncoder.model.Qwen2AudioInstructFeatureExtractor
+          init_args:
+            pre_trained_folder: "Qwen/Qwen2-Audio-7B"
+            squeeze: true
+
+    train:
+      class_path: marble.tasks.HookTheoryKey.datamodule.HookTheoryKeyAudioTrain
+      init_args:
+        sample_rate: 16000
+        channels: 1
+        clip_seconds: 15
+        min_clip_ratio: 0.8
+        channel_mode: random
+        jsonl: data/HookTheory/HookTheoryKey.train.jsonl
+        maj_minor_only: true
+    val:
+      class_path: marble.tasks.HookTheoryKey.datamodule.HookTheoryKeyAudioVal
+      init_args:
+        sample_rate: 16000
+        channels: 1
+        clip_seconds: 15
+        min_clip_ratio: 0.8
+        channel_mode: mix
+        jsonl: data/HookTheory/HookTheoryKey.val.jsonl
+        maj_minor_only: true
+    test:
+      class_path: marble.tasks.HookTheoryKey.datamodule.HookTheoryKeyAudioTest
+      init_args:
+        sample_rate: 16000
+        channels: 1
+        clip_seconds: 15
+        min_clip_ratio: 0.8
+        channel_mode: mix
+        jsonl: data/HookTheory/HookTheoryKey.test.jsonl
+        maj_minor_only: true
+
+optimizer:
+  class_path: torch.optim.Adam
+  init_args:
+    lr: 1e-3
+lr_scheduler: null

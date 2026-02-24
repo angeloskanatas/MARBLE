@@ -17,7 +17,7 @@ trainer:
   logger:
     class_path: lightning.pytorch.loggers.CSVLogger
     init_args:
-      save_dir: "./output/extracted_embeddings_probing/musicgen-small_gtzan_genre/"
+      save_dir: "./output/extracted_embeddings_probing/musicgen-small-lastn_hooktheory_structure/"
 
 model:
   class_path: marble.tasks.ExtractRepresentations.extract.ExtractRepresentationsTask
@@ -39,21 +39,23 @@ model:
       - class_path: marble.modules.transforms.LayerSelector
         init_args:
           layers: ["all"]
-      - class_path: marble.modules.transforms.TimeAvgPool
+      - class_path: marble.modules.transforms.TimeLastNConcat
+        init_args:
+          n_frames: 1
 
     extraction:
       split: train
-      output_dir: ./output/extracted_embeddings_probing/musicgen-small_gtzan_genre/
+      output_dir: ./output/extracted_embeddings_probing/musicgen-small-lastn_hooktheory_structure/
       save_split_subdir: true
       save_frame_level: false
       save_sequence_level: true
       max_samples: null
 
 data:
-  class_path: marble.tasks.GTZANGenre.datamodule.GTZANGenreDataModule
+  class_path: marble.tasks.HookTheoryStructure.datamodule.HookTheoryStructureDataModule
   init_args:
     batch_size: 16
-    num_workers: 16
+    num_workers: 8
 
     audio_transforms:
       train:
@@ -61,47 +63,56 @@ data:
           init_args:
             pre_trained_folder: null
             model_size: small
+        #   - "small" (1024 hidden, 24 layers, ~300M params) - facebook/musicgen-small
+        #   - "medium" (1536 hidden, 48 layers, ~1.5B params) - facebook/musicgen-medium
+        #   - "large" (2048 hidden, 48 layers, ~3.3B params) - facebook/musicgen-large
             squeeze: true
       val:
         - class_path: marble.encoders.MusicGen.model.MusicGenFeatureExtractor
           init_args:
             pre_trained_folder: null
             model_size: small
+        #   - "small" (1024 hidden, 24 layers, ~300M params) - facebook/musicgen-small
+        #   - "medium" (1536 hidden, 48 layers, ~1.5B params) - facebook/musicgen-medium
+        #   - "large" (2048 hidden, 48 layers, ~3.3B params) - facebook/musicgen-large
             squeeze: true
       test:
         - class_path: marble.encoders.MusicGen.model.MusicGenFeatureExtractor
           init_args:
             pre_trained_folder: null
             model_size: small
+        #   - "small" (1024 hidden, 24 layers, ~300M params) - facebook/musicgen-small
+        #   - "medium" (1536 hidden, 48 layers, ~1.5B params) - facebook/musicgen-medium
+        #   - "large" (2048 hidden, 48 layers, ~3.3B params) - facebook/musicgen-large
             squeeze: true
 
     train:
-      class_path: marble.tasks.GTZANGenre.datamodule.GTZANGenreAudioTrain
+      class_path: marble.tasks.HookTheoryStructure.datamodule.HookTheoryStructureAudioTrain
       init_args:
         sample_rate: 32000
         channels: 1
-        clip_seconds: 30.2
-        min_clip_ratio: 0.8
-        channel_mode: first
-        jsonl: data/GTZAN/GTZANGenre.train.jsonl
+        clip_seconds: 15
+        min_clip_ratio: 0.1
+        channel_mode: random
+        jsonl: data/HookTheory/HookTheoryStructure.train.jsonl
     val:
-      class_path: marble.tasks.GTZANGenre.datamodule.GTZANGenreAudioVal
+      class_path: marble.tasks.HookTheoryStructure.datamodule.HookTheoryStructureAudioVal
       init_args:
         sample_rate: 32000
         channels: 1
-        clip_seconds: 30.2
-        min_clip_ratio: 0.8
-        channel_mode: first
-        jsonl: data/GTZAN/GTZANGenre.val.jsonl
+        clip_seconds: 15
+        min_clip_ratio: 0.1
+        channel_mode: mix
+        jsonl: data/HookTheory/HookTheoryStructure.val.jsonl
     test:
-      class_path: marble.tasks.GTZANGenre.datamodule.GTZANGenreAudioTest
+      class_path: marble.tasks.HookTheoryStructure.datamodule.HookTheoryStructureAudioTest
       init_args:
         sample_rate: 32000
         channels: 1
-        clip_seconds: 30.2
-        min_clip_ratio: 0.8
-        channel_mode: first
-        jsonl: data/GTZAN/GTZANGenre.test.jsonl
+        clip_seconds: 15
+        min_clip_ratio: 0.1
+        channel_mode: mix
+        jsonl: data/HookTheory/HookTheoryStructure.test.jsonl
 
 optimizer:
   class_path: torch.optim.Adam

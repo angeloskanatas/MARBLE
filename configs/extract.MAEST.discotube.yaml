@@ -21,7 +21,7 @@ trainer:
     init_args:
       # save_dir: "/scratch/mtg/akanatas/projects/layerbylayer/output/extracted_embeddings/maest-30s_discotube/"
       # save_dir: "/gpfs/projects/mtg/projects/layerbylayer/output/extracted_embeddings/maest-30s_discotube/"
-      save_dir: "/home/akanatas/projects/layerbylayer/output/extracted_embeddings/maest-30s_discotube/"
+      save_dir: "/home/akanatas/projects/layerbylayer/output/extracted_embeddings/lejepa-maest-10s_discotube/"
 
 model:
   class_path: marble.tasks.ExtractRepresentations.extract.ExtractRepresentationsTask
@@ -32,17 +32,17 @@ model:
     encoder:
       class_path: marble.encoders.MAEST.model.MAESTEncoder
       init_args:
-        arch: "discogs-maest-30s-pw-129e"
+        arch: "discogs-maest-10s-pw-129e"
         #   - "discogs-maest-5s-pw-129e" (5s)
         #   - "discogs-maest-10s-pw-129e" (10s)
         #   - "discogs-maest-20s-pw-129e" (20s)
         #   - "discogs-maest-30s-pw-129e" (30s)
         pretrained: true
-        # checkpoint: null  # path to .ckpt for custom MAEST encoder
-        # checkpoint_format: null  # "custom" for custom checkpoint (encoder under backbone.*) | null (official MAEST)
+        checkpoint: "/home/akanatas/projects/music-jepa/music-jepa/checkpoints/lejepa_maest_proj64_6views/last.ckpt"  # path to .ckpt for custom MAEST encoder
+        checkpoint_format: "custom"  # "custom" for custom checkpoint (encoder under backbone.*) | null (official MAEST)
         train_mode: freeze
         distilled_type: mean
-        pooling: mean_patch  # concat (2304) | cls | dist | mean_patch (768)
+        pooling: concat  # concat (2304) | cls | dist | mean_patch (768)
 
     emb_transforms:
       - class_path: marble.modules.transforms.LayerSelector
@@ -54,8 +54,8 @@ model:
       split: test  # options: train, val, test
       # output_dir: /scratch/mtg/akanatas/projects/layerbylayer/output/extracted_embeddings/maest-30s_discotube/
       # output_dir: /gpfs/projects/mtg/projects/layerbylayer/output/extracted_embeddings/maest-30s_discotube/
-      output_dir: /home/akanatas/projects/layerbylayer/output/extracted_embeddings/maest-30s_discotube/
-      max_samples: 10000  # null = all samples, or set to limit samples processed
+      output_dir: /home/akanatas/projects/layerbylayer/output/extracted_embeddings/lejepa-maest-10s_discotube/
+      max_samples: 5000  # null = all samples, or set to limit samples processed
       # subset_fraction: 0.1  # alternative to max_samples
       sampling_seed: 17
       save_frame_level: false   # frame-level embeddings (N, T, H)
@@ -64,7 +64,7 @@ model:
 
       # optional: extract multiple augmented versions of the same audio
       augmentation:
-        num_augmentations: 10
+        num_augmentations: 2
         seed: 42
         transforms:
           - PitchShift:
@@ -96,8 +96,8 @@ model:
 data:
   class_path: marble.tasks.RawAudio.datamodule.RawAudioDataModule
   init_args:
-    batch_size: 32
-    num_workers: 16
+    batch_size: 4
+    num_workers: 8
 
     # MAEST handles audio preprocessing internally (mel inside model), no audio_transforms needed
 
@@ -139,12 +139,12 @@ data:
         jsonl: /home/akanatas/discotube/discotube_balanced_ids_local.jsonl
         sample_rate: 16000
         channels: 1
-        clip_seconds: 30.0  # match arch (30s for discogs-maest-30s-*)
+        clip_seconds: 10.0  # match arch (30s for discogs-maest-30s-*)
         min_clip_ratio: 0.8  # at least 80% of the clip length
         clips_per_file: 1  # one random clip per file
         clip_selection_seed: 42
         channel_mode: mix  # first, random, mix
-        max_files: 20000  # null = all files
+        max_files: 10000  # null = all files
         random_seed: 42
         max_duration_seconds: 1800
         backend: "soundfile"

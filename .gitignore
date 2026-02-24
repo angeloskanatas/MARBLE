@@ -425,3 +425,4 @@ tests/filelist.txt
 pred.jsonl
 tests/test.clamp3.npy
 tests/test.mert.npy
+config.yaml
