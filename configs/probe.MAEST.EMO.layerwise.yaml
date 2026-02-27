@@ -82,7 +82,7 @@ model:
 data:
   class_path: marble.tasks.EMO.datamodule.EMOEmbeddingDataModule
   init_args:
-    embedding_root: ./output/extracted_embeddings_probing/maest-30s-discogs-pw_emo/
+    embedding_root: ./output/extracted_embeddings_probing/maest-10s-discogs-pw_emo/
     layer_idx: 0
     train_jsonl: data/EMO/EMO.train.jsonl
     val_jsonl: data/EMO/EMO.val.jsonl

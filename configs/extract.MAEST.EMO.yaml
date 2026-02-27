@@ -17,7 +17,7 @@ trainer:
   logger:
     class_path: lightning.pytorch.loggers.CSVLogger
     init_args:
-      save_dir: "./output/extracted_embeddings_probing/maest-30s-discogs-pw_emo/"
+      save_dir: "./output/extracted_embeddings_probing/maest-10s-discogs-pw_emo/"
 
 model:
   class_path: marble.tasks.ExtractRepresentations.extract.ExtractRepresentationsTask
@@ -28,7 +28,7 @@ model:
     encoder:
       class_path: marble.encoders.MAEST.model.MAESTEncoder
       init_args:
-        arch: "discogs-maest-30s-pw-129e"
+        arch: "discogs-maest-10s-pw-129e"
         pretrained: true
         # checkpoint: null  # path to .ckpt for custom MAEST encoder
         # checkpoint_format: null  # "custom" for custom checkpoint (encoder under backbone.*)
@@ -44,7 +44,7 @@ model:
 
     extraction:
       split: train
-      output_dir: ./output/extracted_embeddings_probing/maest-30s-discogs-pw_emo/
+      output_dir: ./output/extracted_embeddings_probing/maest-10s-discogs-pw_emo/
       save_split_subdir: true
       save_frame_level: false
       save_sequence_level: true
@@ -53,8 +53,8 @@ model:
 data:
   class_path: marble.tasks.EMO.datamodule.EMODataModule
   init_args:
-    batch_size: 32
-    num_workers: 8
+    batch_size: 8
+    num_workers: 16
 
     audio_transforms:
       train: []
@@ -66,7 +66,7 @@ data:
       init_args:
         sample_rate: 16000
         channels: 1
-        clip_seconds: 30.0  # match arch (10s for discogs-maest-10s-*)
+        clip_seconds: 10.0  # match arch (10s for discogs-maest-10s-*)
         min_clip_ratio: 0.8
         channel_mode: first
         jsonl: data/EMO/EMO.train.jsonl
@@ -75,7 +75,7 @@ data:
       init_args:
         sample_rate: 16000
         channels: 1
-        clip_seconds: 30.0
+        clip_seconds: 10.0
         min_clip_ratio: 0.8
         channel_mode: first
         jsonl: data/EMO/EMO.val.jsonl
@@ -84,7 +84,7 @@ data:
       init_args:
         sample_rate: 16000
         channels: 1
-        clip_seconds: 30.0
+        clip_seconds: 10.0
         min_clip_ratio: 0.8
         channel_mode: first
         jsonl: data/EMO/EMO.test.jsonl

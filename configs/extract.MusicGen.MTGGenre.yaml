@@ -52,8 +52,8 @@ model:
 data:
   class_path: marble.tasks.MTGGenre.datamodule.MTGGenreDataModule
   init_args:
-    batch_size: 16
-    num_workers: 8
+    batch_size: 8
+    num_workers: 16
 
     audio_transforms:
       train:
@@ -61,27 +61,18 @@ data:
           init_args:
             pre_trained_folder: null
             model_size: small
-        #   - "small" (1024 hidden, 24 layers, ~300M params) - facebook/musicgen-small
-        #   - "medium" (1536 hidden, 48 layers, ~1.5B params) - facebook/musicgen-medium
-        #   - "large" (2048 hidden, 48 layers, ~3.3B params) - facebook/musicgen-large
             squeeze: true
       val:
         - class_path: marble.encoders.MusicGen.model.MusicGenFeatureExtractor
           init_args:
             pre_trained_folder: null
             model_size: small
-        #   - "small" (1024 hidden, 24 layers, ~300M params) - facebook/musicgen-small
-        #   - "medium" (1536 hidden, 48 layers, ~1.5B params) - facebook/musicgen-medium
-        #   - "large" (2048 hidden, 48 layers, ~3.3B params) - facebook/musicgen-large
             squeeze: true
       test:
         - class_path: marble.encoders.MusicGen.model.MusicGenFeatureExtractor
           init_args:
             pre_trained_folder: null
             model_size: small
-        #   - "small" (1024 hidden, 24 layers, ~300M params) - facebook/musicgen-small
-        #   - "medium" (1536 hidden, 48 layers, ~1.5B params) - facebook/musicgen-medium
-        #   - "large" (2048 hidden, 48 layers, ~3.3B params) - facebook/musicgen-large
             squeeze: true
 
     train:
@@ -91,9 +82,11 @@ data:
         channels: 1
         clip_seconds: 30
         min_clip_ratio: 0.8
+        clips_per_file: 1  # one random clip per file
+        clip_selection_seed: 42
         channel_mode: mix
         jsonl: data/MTG/MTGGenre.train.jsonl
-        backend: "soundfile"
+        # backend: "soundfile"
     val:
       class_path: marble.tasks.MTGGenre.datamodule.MTGGenreAudioVal
       init_args:
@@ -101,9 +94,11 @@ data:
         channels: 1
         clip_seconds: 30
         min_clip_ratio: 0.8
+        clips_per_file: 1  # one random clip per file
+        clip_selection_seed: 42
         channel_mode: mix
         jsonl: data/MTG/MTGGenre.val.jsonl
-        backend: "soundfile"
+        # backend: "soundfile"
     test:
       class_path: marble.tasks.MTGGenre.datamodule.MTGGenreAudioTest
       init_args:
@@ -111,9 +106,11 @@ data:
         channels: 1
         clip_seconds: 30
         min_clip_ratio: 0.8
+        clips_per_file: 1  # one random clip per file
+        clip_selection_seed: 42
         channel_mode: mix
         jsonl: data/MTG/MTGGenre.test.jsonl
-        backend: "soundfile"
+        # backend: "soundfile"
 
 optimizer:
   class_path: torch.optim.Adam

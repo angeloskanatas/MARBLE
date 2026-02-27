@@ -1,5 +1,5 @@
 set -e
-OUT=./output/extracted_embeddings_probing/lejepa-maest-10s-gtzan_genre
+OUT=./output/extracted_embeddings_probing/maest-10s-discogs-pw_gtzan_genre
 for split in train val test; do
   echo "Extracting split: $split"
   python cli.py test -c configs/extract.MAEST.GTZANGenre.yaml --model.init_args.extraction.split "$split"

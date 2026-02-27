@@ -17,7 +17,7 @@ trainer:
   logger:
     class_path: lightning.pytorch.loggers.CSVLogger
     init_args:
-      save_dir: "./output/extracted_embeddings_probing/maest-30s-discogs-pw_mtg_top50/"
+      save_dir: "./output/extracted_embeddings_probing/maest-10s-discogs-pw_mtg_top50/"
 
 model:
   class_path: marble.tasks.ExtractRepresentations.extract.ExtractRepresentationsTask
@@ -28,7 +28,7 @@ model:
     encoder:
       class_path: marble.encoders.MAEST.model.MAESTEncoder
       init_args:
-        arch: "discogs-maest-30s-pw-129e"
+        arch: "discogs-maest-10s-pw-129e"
         pretrained: true
         train_mode: freeze
         distilled_type: mean
@@ -42,7 +42,7 @@ model:
 
     extraction:
       split: train
-      output_dir: ./output/extracted_embeddings_probing/maest-30s-discogs-pw_mtg_top50/
+      output_dir: ./output/extracted_embeddings_probing/maest-10s-discogs-pw_mtg_top50/
       save_split_subdir: true
       save_frame_level: false
       save_sequence_level: true
@@ -51,8 +51,8 @@ model:
 data:
   class_path: marble.tasks.MTGTop50.datamodule.MTGTop50DataModule
   init_args:
-    batch_size: 32
-    num_workers: 8
+    batch_size: 8
+    num_workers: 16
 
     audio_transforms:
       train: []
@@ -64,31 +64,37 @@ data:
       init_args:
         sample_rate: 16000
         channels: 1
-        clip_seconds: 30.0
+        clip_seconds: 10.0
         min_clip_ratio: 0.8
+        clips_per_file: 1  # one random clip per file
+        clip_selection_seed: 42
         channel_mode: mix
         jsonl: data/MTG/MTGTop50.train.jsonl
-        backend: "soundfile"
+        # backend: "soundfile"
     val:
       class_path: marble.tasks.MTGTop50.datamodule.MTGTop50AudioVal
       init_args:
         sample_rate: 16000
         channels: 1
-        clip_seconds: 30.0
+        clip_seconds: 10.0
         min_clip_ratio: 0.8
+        clips_per_file: 1  # one random clip per file
+        clip_selection_seed: 42
         channel_mode: mix
         jsonl: data/MTG/MTGTop50.val.jsonl
-        backend: "soundfile"
+        # backend: "soundfile"
     test:
       class_path: marble.tasks.MTGTop50.datamodule.MTGTop50AudioTest
       init_args:
         sample_rate: 16000
         channels: 1
-        clip_seconds: 30.0
+        clip_seconds: 10.0
         min_clip_ratio: 0.8
+        clips_per_file: 1  # one random clip per file
+        clip_selection_seed: 42
         channel_mode: mix
         jsonl: data/MTG/MTGTop50.test.jsonl
-        backend: "soundfile"
+        # backend: "soundfile"
 
 optimizer:
   class_path: torch.optim.Adam

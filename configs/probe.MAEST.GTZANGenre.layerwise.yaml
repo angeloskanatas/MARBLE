@@ -64,7 +64,7 @@ model:
 data:
   class_path: marble.tasks.GTZANGenre.datamodule.GTZANGenreEmbeddingDataModule
   init_args:
-    embedding_root: ./output/extracted_embeddings_probing/lejepa-maest-10s-gtzan_genre/
+    embedding_root: ./output/extracted_embeddings_probing/maest-10s-discogs-pw_gtzan_genre/
     layer_idx: 0
     train_jsonl: data/GTZAN/GTZANGenre.train.jsonl
     val_jsonl: data/GTZAN/GTZANGenre.val.jsonl

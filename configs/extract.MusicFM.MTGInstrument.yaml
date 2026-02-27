@@ -48,8 +48,8 @@ model:
 data:
   class_path: marble.tasks.MTGInstrument.datamodule.MTGInstrumentDataModule
   init_args:
-    batch_size: 16
-    num_workers: 8
+    batch_size: 8
+    num_workers: 16
 
     train:
       class_path: marble.tasks.MTGInstrument.datamodule.MTGInstrumentAudioTrain
@@ -58,9 +58,11 @@ data:
         channels: 1
         clip_seconds: 30
         min_clip_ratio: 0.8
+        clips_per_file: 1  # one random clip per file
+        clip_selection_seed: 42
         channel_mode: mix
         jsonl: data/MTG/MTGInstrument.train.jsonl
-        backend: "soundfile"
+        # backend: "soundfile"
     val:
       class_path: marble.tasks.MTGInstrument.datamodule.MTGInstrumentAudioVal
       init_args:
@@ -68,9 +70,11 @@ data:
         channels: 1
         clip_seconds: 30
         min_clip_ratio: 0.8
+        clips_per_file: 1  # one random clip per file
+        clip_selection_seed: 42
         channel_mode: mix
         jsonl: data/MTG/MTGInstrument.val.jsonl
-        backend: "soundfile"
+        # backend: "soundfile"
     test:
       class_path: marble.tasks.MTGInstrument.datamodule.MTGInstrumentAudioTest
       init_args:
@@ -78,9 +82,11 @@ data:
         channels: 1
         clip_seconds: 30
         min_clip_ratio: 0.8
+        clips_per_file: 1  # one random clip per file
+        clip_selection_seed: 42
         channel_mode: mix
         jsonl: data/MTG/MTGInstrument.test.jsonl
-        backend: "soundfile"
+        # backend: "soundfile"
 
 optimizer:
   class_path: torch.optim.Adam

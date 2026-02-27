@@ -54,8 +54,8 @@ model:
 data:
   class_path: marble.tasks.GS.datamodule.GSDataModule
   init_args:
-    batch_size: 16
-    num_workers: 8
+    batch_size: 8
+    num_workers: 16
 
     audio_transforms:
       train:
@@ -63,27 +63,18 @@ data:
           init_args:
             pre_trained_folder: null
             model_size: small
-        #   - "small" (1024 hidden, 24 layers, ~300M params) - facebook/musicgen-small
-        #   - "medium" (1536 hidden, 48 layers, ~1.5B params) - facebook/musicgen-medium
-        #   - "large" (2048 hidden, 48 layers, ~3.3B params) - facebook/musicgen-large
             squeeze: true
       val:
         - class_path: marble.encoders.MusicGen.model.MusicGenFeatureExtractor
           init_args:
             pre_trained_folder: null
             model_size: small
-        #   - "small" (1024 hidden, 24 layers, ~300M params) - facebook/musicgen-small
-        #   - "medium" (1536 hidden, 48 layers, ~1.5B params) - facebook/musicgen-medium
-        #   - "large" (2048 hidden, 48 layers, ~3.3B params) - facebook/musicgen-large
             squeeze: true
       test:
         - class_path: marble.encoders.MusicGen.model.MusicGenFeatureExtractor
           init_args:
             pre_trained_folder: null
             model_size: small
-        #   - "small" (1024 hidden, 24 layers, ~300M params) - facebook/musicgen-small
-        #   - "medium" (1536 hidden, 48 layers, ~1.5B params) - facebook/musicgen-medium
-        #   - "large" (2048 hidden, 48 layers, ~3.3B params) - facebook/musicgen-large
             squeeze: true
 
     train:

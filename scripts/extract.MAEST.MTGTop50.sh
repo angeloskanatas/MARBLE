@@ -1,5 +1,5 @@
 set -e
-OUT=./output/extracted_embeddings_probing/maest-30s-discogs-pw_mtg_top50
+OUT=./output/extracted_embeddings_probing/maest-10s-discogs-pw_mtg_top50
 for split in train val test; do
   echo "Extracting split: $split"
   python cli.py test -c configs/extract.MAEST.MTGTop50.yaml --model.init_args.extraction.split "$split"

@@ -73,7 +73,7 @@ model:
 data:
   class_path: marble.tasks.GS.datamodule.GSEmbeddingDataModule
   init_args:
-    embedding_root: ./output/extracted_embeddings_probing/maest-30s-discogs-pw_gs/
+    embedding_root: ./output/extracted_embeddings_probing/maest-10s-discogs-pw_gs/
     layer_idx: 0
     train_jsonl: data/GS/GS.train.jsonl
     val_jsonl: data/GS/GS.val.jsonl

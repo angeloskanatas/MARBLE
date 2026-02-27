@@ -35,7 +35,7 @@ model:
         enable_fusion: false
         fusion_type: "None"
 
-        emb_transforms: []
+    emb_transforms: []
 
     extraction:
       split: train

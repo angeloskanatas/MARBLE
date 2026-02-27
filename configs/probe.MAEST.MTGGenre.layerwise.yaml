@@ -84,7 +84,7 @@ model:
 data:
   class_path: marble.tasks.MTGGenre.datamodule.MTGGenreEmbeddingDataModule
   init_args:
-    embedding_root: ./output/extracted_embeddings_probing/maest-30s-discogs-pw_mtg_genre/
+    embedding_root: ./output/extracted_embeddings_probing/maest-10s-discogs-pw_mtg_genre/
     layer_idx: 0
     train_jsonl: data/MTG/MTGGenre.train.jsonl
     val_jsonl: data/MTG/MTGGenre.val.jsonl

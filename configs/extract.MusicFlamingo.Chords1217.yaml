@@ -48,8 +48,8 @@ model:
 data:
   class_path: marble.tasks.Chords1217.datamodule.Chords1217DataModule
   init_args:
-    batch_size: 16
-    num_workers: 8
+    batch_size: 4
+    num_workers: 16
 
     audio_transforms:
       train:
@@ -78,7 +78,7 @@ data:
         channel_mode: random
         jsonl: data/Chords1217/Chords1217.train.jsonl
         label_freq: 25
-        backend: "soundfile"
+        # backend: "soundfile"
     val:
       class_path: marble.tasks.Chords1217.datamodule.Chords1217AudioVal
       init_args:
@@ -89,7 +89,7 @@ data:
         channel_mode: mix
         jsonl: data/Chords1217/Chords1217.val.jsonl
         label_freq: 25
-        backend: "soundfile"
+        # backend: "soundfile"
     test:
       class_path: marble.tasks.Chords1217.datamodule.Chords1217AudioTest
       init_args:
@@ -100,7 +100,7 @@ data:
         channel_mode: mix
         jsonl: data/Chords1217/Chords1217.test.jsonl
         label_freq: 25
-        backend: "soundfile"
+        # backend: "soundfile"
 
 optimizer:
   class_path: torch.optim.Adam

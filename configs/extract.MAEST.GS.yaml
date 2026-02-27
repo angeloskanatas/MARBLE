@@ -17,7 +17,7 @@ trainer:
   logger:
     class_path: lightning.pytorch.loggers.CSVLogger
     init_args:
-      save_dir: "./output/extracted_embeddings_probing/maest-30s-discogs-pw_gs/"
+      save_dir: "./output/extracted_embeddings_probing/maest-10s-discogs-pw_gs/"
 
 model:
   class_path: marble.tasks.ExtractRepresentations.extract.ExtractRepresentationsTask
@@ -28,7 +28,7 @@ model:
     encoder:
       class_path: marble.encoders.MAEST.model.MAESTEncoder
       init_args:
-        arch: "discogs-maest-30s-pw-129e"
+        arch: "discogs-maest-10s-pw-129e"
         pretrained: true
         train_mode: freeze
         distilled_type: mean
@@ -42,7 +42,7 @@ model:
 
     extraction:
       split: train
-      output_dir: ./output/extracted_embeddings_probing/maest-30s-discogs-pw_gs/
+      output_dir: ./output/extracted_embeddings_probing/maest-10s-discogs-pw_gs/
       save_split_subdir: true
       save_frame_level: false
       save_sequence_level: true
@@ -51,8 +51,8 @@ model:
 data:
   class_path: marble.tasks.GS.datamodule.GSDataModule
   init_args:
-    batch_size: 32
-    num_workers: 8
+    batch_size: 8
+    num_workers: 16
 
     audio_transforms:
       train: []
@@ -64,7 +64,7 @@ data:
       init_args:
         sample_rate: 16000
         channels: 1
-        clip_seconds: 30.0
+        clip_seconds: 10.0
         min_clip_ratio: 0.8
         channel_mode: first
         jsonl: data/GS/GS.train.jsonl
@@ -73,7 +73,7 @@ data:
       init_args:
         sample_rate: 16000
         channels: 1
-        clip_seconds: 30.0
+        clip_seconds: 10.0
         min_clip_ratio: 0.8
         channel_mode: first
         jsonl: data/GS/GS.val.jsonl
@@ -82,7 +82,7 @@ data:
       init_args:
         sample_rate: 16000
         channels: 1
-        clip_seconds: 30.0
+        clip_seconds: 10.0
         min_clip_ratio: 0.8
         channel_mode: first
         jsonl: data/GS/GS.test.jsonl

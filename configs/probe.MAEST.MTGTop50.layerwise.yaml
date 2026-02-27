@@ -84,7 +84,7 @@ model:
 data:
   class_path: marble.tasks.MTGTop50.datamodule.MTGTop50EmbeddingDataModule
   init_args:
-    embedding_root: ./output/extracted_embeddings_probing/maest-30s-discogs-pw_mtg_top50/
+    embedding_root: ./output/extracted_embeddings_probing/maest-10s-discogs-pw_mtg_top50/
     layer_idx: 0
     train_jsonl: data/MTG/MTGTop50.train.jsonl
     val_jsonl: data/MTG/MTGTop50.val.jsonl

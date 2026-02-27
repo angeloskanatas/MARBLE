@@ -84,7 +84,7 @@ model:
 data:
   class_path: marble.tasks.MTGMood.datamodule.MTGMoodEmbeddingDataModule
   init_args:
-    embedding_root: ./output/extracted_embeddings_probing/maest-30s-discogs-pw_mtg_mood/
+    embedding_root: ./output/extracted_embeddings_probing/maest-10s-discogs-pw_mtg_mood/
     layer_idx: 0
     train_jsonl: data/MTG/MTGMood.train.jsonl
     val_jsonl: data/MTG/MTGMood.val.jsonl

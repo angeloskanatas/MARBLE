@@ -73,7 +73,7 @@ model:
 data:
   class_path: marble.tasks.HookTheoryKey.datamodule.HookTheoryKeyEmbeddingDataModule
   init_args:
-    embedding_root: ./output/extracted_embeddings_probing/maest-30s-discogs-pw_hooktheory_key/
+    embedding_root: ./output/extracted_embeddings_probing/maest-10s-discogs-pw_hooktheory_key/
     layer_idx: 0
     train_jsonl: data/HookTheory/HookTheoryKey.train.jsonl
     val_jsonl: data/HookTheory/HookTheoryKey.val.jsonl

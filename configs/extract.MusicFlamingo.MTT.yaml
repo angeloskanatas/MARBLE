@@ -49,8 +49,8 @@ model:
 data:
   class_path: marble.tasks.MTT.datamodule.MTTDataModule
   init_args:
-    batch_size: 16
-    num_workers: 8
+    batch_size: 4
+    num_workers: 16
 
     audio_transforms:
       train:
@@ -78,7 +78,7 @@ data:
         min_clip_ratio: 0.8
         channel_mode: mix
         jsonl: data/MTT/MTT.train.jsonl
-        backend: "soundfile"
+        # backend: "soundfile"
     val:
       class_path: marble.tasks.MTT.datamodule.MTTAudioVal
       init_args:
@@ -88,7 +88,7 @@ data:
         min_clip_ratio: 0.8
         channel_mode: mix
         jsonl: data/MTT/MTT.val.jsonl
-        backend: "soundfile"
+        # backend: "soundfile"
     test:
       class_path: marble.tasks.MTT.datamodule.MTTAudioTest
       init_args:
@@ -98,7 +98,7 @@ data:
         min_clip_ratio: 0.8
         channel_mode: mix
         jsonl: data/MTT/MTT.test.jsonl
-        backend: "soundfile"
+        # backend: "soundfile"
 
 optimizer:
   class_path: torch.optim.Adam

@@ -1,7 +1,7 @@
 set -e
 CONFIG=configs/probe.MAEST.GTZANGenre.layerwise.yaml
-EMB_ROOT=./output/extracted_embeddings_probing/lejepa-maest-10s-gtzan_genre
-OUT=./output/probe.GTZANGenre.lejepa-maest-10s.layerwise
+EMB_ROOT=./output/extracted_embeddings_probing/maest-10s-discogs-pw_gtzan_genre
+OUT=./output/probe.GTZANGenre.maest-10s-discogs-pw.layerwise
 RESULTS_JSON=$(realpath -m "$OUT/layerwise_results.json")
 OVERRIDE=$(mktemp -t marble_layer_override.XXXXXX.yaml)
 cleanup() { rm -f "$OVERRIDE"; }
@@ -10,7 +10,7 @@ mkdir -p "$OUT"
 
 mapfile -t LAYERS < <(python - <<'PY'
 from pathlib import Path
-root = Path("./output/extracted_embeddings_probing/lejepa-maest-10s-gtzan_genre/train")
+root = Path("./output/extracted_embeddings_probing/maest-10s-discogs-pw_gtzan_genre/train")
 for p in sorted(root.glob("layer*"), key=lambda x: int(x.name.replace("layer", ""))):
     name = p.name
     if name.startswith("layer") and name[5:].isdigit():

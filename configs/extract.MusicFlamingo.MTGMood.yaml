@@ -49,8 +49,8 @@ model:
 data:
   class_path: marble.tasks.MTGMood.datamodule.MTGMoodDataModule
   init_args:
-    batch_size: 16
-    num_workers: 8
+    batch_size: 4
+    num_workers: 16
 
     audio_transforms:
       train:
@@ -76,9 +76,11 @@ data:
         channels: 1
         clip_seconds: 30
         min_clip_ratio: 0.8
+        clips_per_file: 1  # one random clip per file
+        clip_selection_seed: 42
         channel_mode: mix
         jsonl: data/MTG/MTGMood.train.jsonl
-        backend: "soundfile"
+        # backend: "soundfile"
     val:
       class_path: marble.tasks.MTGMood.datamodule.MTGMoodAudioVal
       init_args:
@@ -86,9 +88,11 @@ data:
         channels: 1
         clip_seconds: 30
         min_clip_ratio: 0.8
+        clips_per_file: 1  # one random clip per file
+        clip_selection_seed: 42
         channel_mode: mix
         jsonl: data/MTG/MTGMood.val.jsonl
-        backend: "soundfile"
+        # backend: "soundfile"
     test:
       class_path: marble.tasks.MTGMood.datamodule.MTGMoodAudioTest
       init_args:
@@ -96,9 +100,11 @@ data:
         channels: 1
         clip_seconds: 30
         min_clip_ratio: 0.8
+        clips_per_file: 1  # one random clip per file
+        clip_selection_seed: 42
         channel_mode: mix
         jsonl: data/MTG/MTGMood.test.jsonl
-        backend: "soundfile"
+        # backend: "soundfile"
 
 optimizer:
   class_path: torch.optim.Adam

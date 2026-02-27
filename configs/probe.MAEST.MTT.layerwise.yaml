@@ -84,7 +84,7 @@ model:
 data:
   class_path: marble.tasks.MTT.datamodule.MTTEmbeddingDataModule
   init_args:
-    embedding_root: ./output/extracted_embeddings_probing/lejepa-maest-10s_mtt/
+    embedding_root: ./output/extracted_embeddings_probing/maest-10s-discogs-pw_mtt/
     layer_idx: 0
     train_jsonl: data/MTT/MTT.train.jsonl
     val_jsonl: data/MTT/MTT.val.jsonl
