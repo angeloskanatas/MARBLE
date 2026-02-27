@@ -31,12 +31,10 @@ class GSEmbeddingDataset(Dataset):
         self.layer_idx = layer_idx
         with open(jsonl, "r") as f:
             self.meta = [json.loads(line) for line in f]
-        self._path_to_label = {
-            info["audio_path"]: self.LABEL2IDX[info["label"]]
-            for info in self.meta
-        }
-        self._path_to_ori_uid = {
-            info["audio_path"]: info["ori_uid"]
+        # Keyed by ori_uid because GS __getitem__ returns ori_uid (not audio_path)
+        # as the path element, so sample_to_audio_path.json contains ori_uids
+        self._uid_to_label = {
+            info["ori_uid"]: self.LABEL2IDX[info["label"]]
             for info in self.meta
         }
         mapping_path = self.embedding_dir / "sample_to_audio_path.json"
@@ -56,13 +54,10 @@ class GSEmbeddingDataset(Dataset):
             shape=shape,
         )
         self._labels = [
-            self._path_to_label[path]
-            for path in self._sample_to_audio_path
+            self._uid_to_label[uid]
+            for uid in self._sample_to_audio_path
         ]
-        self._ori_uids = [
-            self._path_to_ori_uid[path]
-            for path in self._sample_to_audio_path
-        ]
+        self._ori_uids = list(self._sample_to_audio_path)
 
     def __len__(self) -> int:
         return len(self._labels)

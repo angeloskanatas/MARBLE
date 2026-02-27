@@ -76,7 +76,9 @@ class _MTGTop50AudioBase(BaseAudioDataset):
     
     def __init__(self, jsonl: str, sample_rate: int, channels: int,
                  clip_seconds: float, channel_mode: str="first",
-                 min_clip_ratio: float=1.0, backend: Optional[str] = None):
+                 min_clip_ratio: float=1.0, backend: Optional[str] = None,
+                 clips_per_file: Optional[int] = None,
+                 clip_selection_seed: Optional[int] = None):
         super().__init__(
             jsonl=jsonl,
             sample_rate=sample_rate,
@@ -84,7 +86,9 @@ class _MTGTop50AudioBase(BaseAudioDataset):
             clip_seconds=clip_seconds,
             channel_mode=channel_mode,
             min_clip_ratio=min_clip_ratio,
-            backend=backend
+            backend=backend,
+            clips_per_file=clips_per_file,
+            clip_selection_seed=clip_selection_seed,
         )
 
     def get_targets(self, file_idx: int, slice_idx: int, orig_sr: int, orig_clip_frames: int):

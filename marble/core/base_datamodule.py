@@ -2,6 +2,7 @@
 
 import os
 import json
+import random
 from abc import ABCMeta, abstractmethod, ABC
 from typing import List, Tuple, Optional
 
@@ -113,11 +114,13 @@ class BaseAudioDataset(Dataset, ABC):
         label_freq: int = -1,
         channel_mode: str = "first",
         min_clip_ratio: float = 1.0,
-        backend: Optional[str] = None
+        backend: Optional[str] = None,
+        clips_per_file: Optional[int] = None,
+        clip_selection_seed: Optional[int] = None,
     ):
         """
         Args:
-            jsonl (str): Path to a JSONL file, where each line is a JSON object 
+            jsonl (str): Path to a JSONL file, where each line is a JSON object
                           containing at least:
                             - "audio_path": path to the audio file on disk
                             - "sample_rate": original sample rate (int)
@@ -130,9 +133,8 @@ class BaseAudioDataset(Dataset, ABC):
             channel_mode (str): How to downmix when `channels == 1` but the audio is multi-channel.
                                 Options: "first", "mix", "random".
             min_clip_ratio (float): Minimum fraction of a final (possibly partial) clip to keep.
-                                    E.g., if clip_seconds = 10, orig_sr = 44100, num_samples = 450000,
-                                    then there are 10 full clips (10·44100 = 441000), plus 9000 samples left.
-                                    If 9000/44100 = 0.204 > min_clip_ratio, a partial clip is kept.
+            clips_per_file (int, optional): Number of clips per file. None = all non-overlapping clips.
+            clip_selection_seed (int, optional): RNG seed for clip selection. Required when clips_per_file is set.
         """
         super().__init__()
         assert os.path.isfile(jsonl), f"JSONL file not found: {jsonl}"
@@ -146,6 +148,14 @@ class BaseAudioDataset(Dataset, ABC):
         self.label_freq = label_freq
         self.min_clip_ratio = min_clip_ratio
         self.backend = backend
+
+        if clips_per_file is not None:
+            if clips_per_file <= 0:
+                raise ValueError(f"clips_per_file must be > 0, got {clips_per_file}")
+            if clip_selection_seed is None:
+                raise ValueError("clip_selection_seed is required when clips_per_file is not None")
+        self.clips_per_file = clips_per_file
+        self.clip_selection_seed = clip_selection_seed
 
         # Validate channel_mode if expecting mono output
         if self.channels == 1 and self.channel_mode not in ("first", "mix", "random"):
@@ -166,7 +176,9 @@ class BaseAudioDataset(Dataset, ABC):
         self.index_map: List[Tuple[int, int, int, int]] = self._build_index_map(
             metas=self.meta,
             clip_seconds=self.clip_seconds,
-            min_clip_ratio=self.min_clip_ratio
+            min_clip_ratio=self.min_clip_ratio,
+            clips_per_file=self.clips_per_file,
+            clip_selection_seed=self.clip_selection_seed,
         )
 
     def __len__(self) -> int:
@@ -329,7 +341,9 @@ class BaseAudioDataset(Dataset, ABC):
         self,
         metas: List[dict],
         clip_seconds: float,
-        min_clip_ratio: float
+        min_clip_ratio: float,
+        clips_per_file: Optional[int] = None,
+        clip_selection_seed: Optional[int] = None,
     ) -> List[Tuple[int, int, int, int]]:
         """
         Construct a list of tuples indicating how to slice each audio file into fixed-length clips.
@@ -342,7 +356,13 @@ class BaseAudioDataset(Dataset, ABC):
                               (i.e., floor(clip_seconds * orig_sr))
 
         If the final partial segment has length >= min_clip_ratio * orig_clip_frames, it is included as well.
+
+        Args:
+            clips_per_file: None = all clips, 1 = one random clip, N = N random clips per file.
+            clip_selection_seed: RNG seed for deterministic clip selection.
         """
+        clip_rng = random.Random(clip_selection_seed) if clip_selection_seed is not None else None
+
         index_map: List[Tuple[int, int, int, int]] = []
         for file_idx, info in enumerate(metas):
             orig_sr = int(info["sample_rate"])
@@ -358,7 +378,21 @@ class BaseAudioDataset(Dataset, ABC):
             else:
                 n_slices = n_full
 
-            for slice_idx in range(n_slices):
+            if n_slices == 0:
+                continue
+
+            if clips_per_file is None:
+                for slice_idx in range(n_slices):
+                    index_map.append((file_idx, slice_idx, orig_sr, orig_clip_frames))
+            elif clips_per_file == 1:
+                slice_idx = clip_rng.randint(0, n_slices - 1)
                 index_map.append((file_idx, slice_idx, orig_sr, orig_clip_frames))
+            else:
+                if clips_per_file >= n_slices:
+                    selected = list(range(n_slices))
+                else:
+                    selected = sorted(clip_rng.sample(range(n_slices), clips_per_file))
+                for slice_idx in selected:
+                    index_map.append((file_idx, slice_idx, orig_sr, orig_clip_frames))
 
         return index_map
