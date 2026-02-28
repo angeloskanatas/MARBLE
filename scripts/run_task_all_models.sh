@@ -22,6 +22,8 @@ set -e
 TASK="${1:?Usage: $0 TASK [extract|probe|both]}"
 MODE="${2:-both}"
 
+ONLY_MODELS=()
+
 if [[ "$MODE" != "extract" && "$MODE" != "probe" && "$MODE" != "both" ]]; then
   echo "MODE must be extract, probe, or both (default)."
   exit 1
@@ -47,7 +49,11 @@ get_models() {
   done | sort -u
 }
 
-MODELS=($(get_models "$TASK"))
+if [[ ${#ONLY_MODELS[@]} -gt 0 ]]; then
+  MODELS=("${ONLY_MODELS[@]}")
+else
+  MODELS=($(get_models "$TASK"))
+fi
 OTHER=()
 for m in "${MODELS[@]}"; do
   [[ "$m" == "MAEST" || "$m" == "MusicFlamingo" ]] || OTHER+=("$m")
