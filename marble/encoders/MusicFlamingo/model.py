@@ -63,7 +63,7 @@ class MusicFlamingoEncoder(BaseEncoder):
         
         model_kwargs = {
             "attn_implementation": attn_implementation,
-            "device_map": "auto",
+            # "device_map": "auto",
         }
         
         if torch_dtype is not None:
