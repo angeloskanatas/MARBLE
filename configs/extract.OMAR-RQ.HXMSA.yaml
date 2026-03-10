@@ -1,0 +1,91 @@
+seed_everything: 1234
+ckpt_path: null
+
+trainer:
+  fast_dev_run: false
+  accelerator: gpu
+  devices: [0]
+  num_nodes: 1
+  precision: bf16-mixed
+  max_epochs: 1
+  check_val_every_n_epoch: 1
+  num_sanity_val_steps: 0
+  log_every_n_steps: 100
+  limit_test_batches: 1
+
+  callbacks: []
+  logger:
+    class_path: lightning.pytorch.loggers.CSVLogger
+    init_args:
+      save_dir: "./output/extracted_embeddings_probing/omar-rq-multifeature-25hz-fsq_hxmsa/"
+
+model:
+  class_path: marble.tasks.ExtractRepresentations.extract.ExtractRepresentationsTask
+  init_args:
+    sample_rate: 24000  # base/multicodebook: 16k; multifeature(-25hz): 24k
+    use_ema: false
+
+    encoder:
+      class_path: marble.encoders.OMAR_RQ.model.OMAR_RQ_Encoder
+      init_args:
+        model_id: "mtg-upf/omar-rq-multifeature-25hz-fsq"
+        #   - "mtg-upf/omar-rq-base" (16kHz, mel spectrogram, ~15.63 Hz embedding rate)
+        #   - "mtg-upf/omar-rq-multicodebook" (16kHz, mel spectrogram, ~15.63 Hz embedding rate)
+        #   - "mtg-upf/omar-rq-multifeature" (24kHz, audio, ~18.75 Hz embedding rate)
+        #   - "mtg-upf/omar-rq-multifeature-25hz" (24kHz, audio, 25 Hz embedding rate)
+        #   - "mtg-upf/omar-rq-multifeature-25hz-fsq" (24kHz, audio, 25 Hz embedding rate)
+        train_mode: freeze
+
+    emb_transforms:
+      - class_path: marble.modules.transforms.LayerSelector
+        init_args:
+          layers: ["all"]
+      - class_path: marble.modules.transforms.TimeAvgPool
+
+    extraction:
+      split: train
+      output_dir: ./output/extracted_embeddings_probing/omar-rq-multifeature-25hz-fsq_hxmsa/
+      save_split_subdir: true
+      save_frame_level: false
+      save_sequence_level: true
+      max_samples: null
+
+data:
+  class_path: marble.tasks.HXMSA.datamodule.HXMSADataModule
+  init_args:
+    batch_size: 8
+    num_workers: 16
+
+    train:
+      class_path: marble.tasks.HXMSA.datamodule.HXMSAAudioTrain
+      init_args:
+        sample_rate: 24000  # base/multicodebook: 16k; multifeature(-25hz): 24k
+        channels: 1
+        clip_seconds: 15
+        min_clip_ratio: 0.1
+        channel_mode: random
+        jsonl: data/HXMSA/HXMSA.train.jsonl
+    val:
+      class_path: marble.tasks.HXMSA.datamodule.HXMSAAudioVal
+      init_args:
+        sample_rate: 24000  # base/multicodebook: 16k; multifeature(-25hz): 24k
+        channels: 1
+        clip_seconds: 15
+        min_clip_ratio: 0.1
+        channel_mode: mix
+        jsonl: data/HXMSA/HXMSA.val.jsonl
+    test:
+      class_path: marble.tasks.HXMSA.datamodule.HXMSAAudioTest
+      init_args:
+        sample_rate: 24000  # base/multicodebook: 16k; multifeature(-25hz): 24k
+        channels: 1
+        clip_seconds: 15
+        min_clip_ratio: 0.1
+        channel_mode: mix
+        jsonl: data/HXMSA/HXMSA.test.jsonl
+
+optimizer:
+  class_path: torch.optim.Adam
+  init_args:
+    lr: 1e-3
+lr_scheduler: null
