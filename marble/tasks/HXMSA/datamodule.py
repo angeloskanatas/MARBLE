@@ -11,7 +11,9 @@ from torch.utils.data import Dataset, DataLoader
 import lightning.pytorch as pl
 
 from marble.core.base_datamodule import BaseDataModule
-from marble.tasks.HXMSA.embedding_dataset import HXMSAEmbeddingDataset, LABEL2IDX, IDX2LABEL
+from marble.tasks.HXMSA.embedding_dataset import (
+    HXMSAEmbeddingDataset, LABEL2IDX, IDX2LABEL, normalize_label,
+)
 
 
 class _HXMSAAudioBase(Dataset):
@@ -23,9 +25,8 @@ class _HXMSAAudioBase(Dataset):
     of the full-track audio.  Long segments are split into non-overlapping clips
     of `clip_seconds`; the last clip is zero-padded if shorter.
 
-    Label set (8 classes):
-        0: intro, 1: verse, 2: prechorus, 3: chorus,
-        4: bridge, 5: outro, 6: inst, 7: other
+    Label set (6 classes, after normalization):
+        0: intro, 1: verse, 2: chorus, 3: bridge, 4: outro, 5: inst
     """
 
     LABEL2IDX = LABEL2IDX
@@ -67,10 +68,13 @@ class _HXMSAAudioBase(Dataset):
         with open(jsonl, "r") as f:
             self.meta = [json.loads(line) for line in f]
 
-        # Validate labels
         for info in self.meta:
-            if info["label"] not in self.LABEL2IDX:
-                raise ValueError(f"Unknown label: {info['label']}")
+            normed = normalize_label(info["label"])
+            if normed not in self.LABEL2IDX:
+                raise ValueError(
+                    f"Label '{info['label']}' normalized to '{normed}' "
+                    f"which is not in LABEL2IDX"
+                )
 
         # Build index map: (file_idx, slice_idx, orig_sr, orig_clip_frames, orig_channels)
         self.index_map: List[Tuple[int, int, int, int, int]] = []
@@ -106,7 +110,7 @@ class _HXMSAAudioBase(Dataset):
         info = self.meta[file_idx]
         path = info["audio_path"]
         track_id = info["track_id"]
-        label = self.LABEL2IDX[info["label"]]
+        label = self.LABEL2IDX[normalize_label(info["label"])]
 
         # Offset into the full track: segment base + clip position within segment
         base_offset = info.get("segment_offset_samples", 0)

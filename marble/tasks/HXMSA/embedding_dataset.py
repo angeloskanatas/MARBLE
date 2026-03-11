@@ -9,20 +9,55 @@ import torch
 from torch.utils.data import Dataset
 
 
+def normalize_label(label: str) -> str:
+    """Normalize Harmonix segment labels following https://arxiv.org/pdf/2205.14700."""
+    substrings = [
+        ("silence", "inst"),
+        ("pre-chorus", "verse"),
+        ("prechorus", "verse"),
+        ("refrain", "chorus"),
+        ("chorus", "chorus"),
+        ("theme", "chorus"),
+        ("stutter", "chorus"),
+        ("verse", "verse"),
+        ("rap", "verse"),
+        ("section", "verse"),
+        ("slow", "verse"),
+        ("build", "verse"),
+        ("dialog", "verse"),
+        ("intro", "intro"),
+        ("fadein", "intro"),
+        ("opening", "intro"),
+        ("bridge", "bridge"),
+        ("trans", "bridge"),
+        ("out", "outro"),
+        ("coda", "outro"),
+        ("ending", "outro"),
+        ("break", "inst"),
+        ("inst", "inst"),
+        ("interlude", "inst"),
+        ("impro", "inst"),
+        ("solo", "inst"),
+    ]
+    lower = label.lower()
+    for s1, s2 in substrings:
+        if s1 in lower:
+            return s2
+    return "inst"  # fallback for unrecognized labels
+
+
 LABEL2IDX = {
     "intro": 0,
     "verse": 1,
-    "prechorus": 2,
-    "chorus": 3,
-    "bridge": 4,
-    "outro": 5,
-    "inst": 6,
-    "other": 7,
+    "chorus": 2,
+    "bridge": 3,
+    "outro": 4,
+    "inst": 5,
 }
 
 IDX2LABEL = {v: k for k, v in LABEL2IDX.items()}
 
-NUM_CLASSES = len(IDX2LABEL)  # 8
+NUM_CLASSES = len(IDX2LABEL)  # 6
 
 
 class HXMSAEmbeddingDataset(Dataset):
@@ -60,7 +95,7 @@ class HXMSAEmbeddingDataset(Dataset):
         self._key_to_label = {}
         for info in self.meta:
             key = f"{info['track_id']}||{info['segment_start']}"
-            self._key_to_label[key] = self.LABEL2IDX[info["label"]]
+            self._key_to_label[key] = self.LABEL2IDX[normalize_label(info["label"])]
 
         # Load sample-to-audio-path mapping (stores composite keys, not audio paths)
         mapping_path = self.embedding_dir / "sample_to_audio_path.json"
