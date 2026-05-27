@@ -957,8 +957,7 @@ class ExtractRepresentationsTask(BaseTask):
                             
                             if aug_idx is None:
                                 base_audio_paths = audio_paths
-                                if self.save_sequence_level:
-                                    self._sample_to_audio_path.extend(base_audio_paths)
+                                self._sample_to_audio_path.extend(base_audio_paths)
                             
                             try:
                                 encoder_output = self.encoder(waveform)

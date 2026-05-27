@@ -217,3 +217,56 @@ class ChordsACEEmbeddingDataset(Dataset):
             file_idx, slice_idx, orig_sr, orig_clip_frames
         )
         return emb, root_t, bass_t, tones_t, audio_path
+
+
+class ChordsACEMultiLayerEmbeddingDataset(ChordsACEEmbeddingDataset):
+    """
+    Multi-layer variant: returns embeddings of shape (L, T, H) by stacking
+    frame-level files from `layer{N}/frame-level/` for every N in `layer_indices`.
+    """
+
+    def __init__(
+        self,
+        embedding_dir: str,
+        layer_indices: List[int],
+        jsonl: str,
+        clip_seconds: float,
+        label_freq: int,
+        min_clip_ratio: float = 0.8,
+    ):
+        # Initialise base class with the first layer (file discovery happens here)
+        super().__init__(
+            embedding_dir=embedding_dir,
+            layer_idx=layer_indices[0],
+            jsonl=jsonl,
+            clip_seconds=clip_seconds,
+            label_freq=label_freq,
+            min_clip_ratio=min_clip_ratio,
+        )
+        self.layer_indices = layer_indices
+
+        # Cache filenames keyed by sample_idx for cross-layer reuse
+        self._idx_to_filename = {i: p.name for i, p in self._idx_to_file.items()}
+        self._frame_dirs = [
+            self.embedding_dir / f"layer{l}" / "frame-level"
+            for l in layer_indices
+        ]
+
+    def __getitem__(self, idx: int):
+        sample_idx = self.sample_indices[idx]
+        filename = self._idx_to_filename[sample_idx]
+
+        embs = []
+        for frame_dir in self._frame_dirs:
+            emb_np = np.load(frame_dir / filename)
+            embs.append(torch.from_numpy(emb_np).float())  # (T, H)
+        emb = torch.stack(embs, dim=0)  # (L, T, H)
+
+        file_idx, slice_idx, orig_sr, orig_clip_frames = self.index_map[sample_idx]
+        info = self.meta[file_idx]
+        audio_path = info["audio_path"]
+
+        root_t, bass_t, tones_t = self._get_chord_targets(
+            file_idx, slice_idx, orig_sr, orig_clip_frames
+        )
+        return emb, root_t, bass_t, tones_t, audio_path

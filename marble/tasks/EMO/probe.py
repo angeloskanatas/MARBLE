@@ -131,8 +131,10 @@ class ProbeOnEmbeddingsTask(ProbeAudioTask):
 
     def forward(self, x: torch.Tensor):
         h = self.encoder(x)
-        if h.dim() == 2:
-            h = h.unsqueeze(1).unsqueeze(2)
+        if h.dim() == 2:          # (B, H) — single layer
+            h = h.unsqueeze(1).unsqueeze(2)  # → (B, 1, 1, H)
+        elif h.dim() == 3:        # (B, L, H) — multi-layer
+            h = h.unsqueeze(2)               # → (B, L, 1, H)
         for t in self.emb_transforms:
             h = t(h)
         outputs = [dec(h) for dec in self.decoders]

@@ -175,6 +175,84 @@ class GTZANGenreDataModule(BaseDataModule):
     pass
 
 
+class GTZANGenreMultiLayerEmbeddingDataModule(pl.LightningDataModule):
+    """
+    DataModule for probing on pre-extracted GTZAN embeddings with MULTIPLE layers.
+    Returns batches of shape (B, L, H) instead of (B, H).
+    """
+
+    def __init__(
+        self,
+        embedding_root: str,
+        layer_indices: list,
+        train_jsonl: str,
+        val_jsonl: str,
+        test_jsonl: str,
+        batch_size: int = 8,
+        num_workers: int = 8,
+    ):
+        super().__init__()
+        from marble.tasks.GTZANGenre.embedding_dataset import GTZANGenreMultiLayerEmbeddingDataset
+        self._dataset_cls = GTZANGenreMultiLayerEmbeddingDataset
+
+        self.embedding_root = Path(embedding_root)
+        self.layer_indices = layer_indices
+        self.train_jsonl = train_jsonl
+        self.val_jsonl = val_jsonl
+        self.test_jsonl = test_jsonl
+        self.batch_size = batch_size
+        self.num_workers = num_workers
+
+    def setup(self, stage: str | None = None):
+        if stage in (None, "fit"):
+            self.train_dataset = self._dataset_cls(
+                self.embedding_root / "train",
+                self.layer_indices,
+                self.train_jsonl,
+            )
+            self.val_dataset = self._dataset_cls(
+                self.embedding_root / "val",
+                self.layer_indices,
+                self.val_jsonl,
+            )
+        if stage in (None, "test", "predict"):
+            self.test_dataset = self._dataset_cls(
+                self.embedding_root / "test",
+                self.layer_indices,
+                self.test_jsonl,
+            )
+
+    def train_dataloader(self):
+        return DataLoader(
+            self.train_dataset,
+            batch_size=self.batch_size,
+            shuffle=True,
+            num_workers=self.num_workers,
+            pin_memory=True,
+            prefetch_factor=2,
+        )
+
+    def val_dataloader(self):
+        return DataLoader(
+            self.val_dataset,
+            batch_size=self.batch_size,
+            shuffle=False,
+            num_workers=self.num_workers,
+            pin_memory=True,
+            prefetch_factor=2,
+        )
+
+    def test_dataloader(self):
+        return DataLoader(
+            self.test_dataset,
+            batch_size=self.batch_size,
+            shuffle=False,
+            num_workers=self.num_workers,
+            pin_memory=True,
+            prefetch_factor=2,
+        )
+
+
 class GTZANGenreEmbeddingDataModule(pl.LightningDataModule):
     """
     DataModule for probing on pre-extracted GTZAN embeddings."""
@@ -188,6 +266,8 @@ class GTZANGenreEmbeddingDataModule(pl.LightningDataModule):
         test_jsonl: str,
         batch_size: int = 8,
         num_workers: int = 8,
+        shuffle_labels: bool = False,
+        shuffle_seed: int = 42,
     ):
         super().__init__()
         self.embedding_root = Path(embedding_root)
@@ -197,6 +277,14 @@ class GTZANGenreEmbeddingDataModule(pl.LightningDataModule):
         self.test_jsonl = test_jsonl
         self.batch_size = batch_size
         self.num_workers = num_workers
+        self.shuffle_labels = shuffle_labels
+        self.shuffle_seed = shuffle_seed
+
+    def _shuffle_dataset_labels(self, dataset, rng):
+        """Randomly permute the label list, breaking embedding-label correspondence."""
+        import numpy as np
+        perm = rng.permutation(len(dataset._labels))
+        dataset._labels = [dataset._labels[i] for i in perm]
 
     def setup(self, stage: str | None = None):
         if stage in (None, "fit"):
@@ -210,6 +298,11 @@ class GTZANGenreEmbeddingDataModule(pl.LightningDataModule):
                 self.layer_idx,
                 self.val_jsonl,
             )
+            if self.shuffle_labels:
+                import numpy as np
+                rng = np.random.RandomState(self.shuffle_seed)
+                self._shuffle_dataset_labels(self.train_dataset, rng)
+                self._shuffle_dataset_labels(self.val_dataset, rng)
         if stage in (None, "test", "predict"):
             self.test_dataset = GTZANGenreEmbeddingDataset(
                 self.embedding_root / "test",

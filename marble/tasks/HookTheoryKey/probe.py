@@ -182,6 +182,8 @@ class ProbeOnEmbeddingsTask(ProbeAudioTask):
         h = self.encoder(x)
         if h.dim() == 2:
             h = h.unsqueeze(1).unsqueeze(2)
+        elif h.dim() == 3:  # (B, L, H) -> (B, L, 1, H)
+            h = h.unsqueeze(2)
         for t in self.emb_transforms:
             h = t(h)
         outputs = [dec(h) for dec in self.decoders]

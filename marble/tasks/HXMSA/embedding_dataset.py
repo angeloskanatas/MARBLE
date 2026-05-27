@@ -131,3 +131,63 @@ class HXMSAEmbeddingDataset(Dataset):
         label = self._labels[idx]
         key = self._sample_to_key[idx]
         return torch.from_numpy(emb).float(), label, key
+
+
+class HXMSAMultiLayerEmbeddingDataset(Dataset):
+    """
+    Dataset that loads pre-extracted sequence-level embeddings for MULTIPLE layers.
+    Returns stacked embeddings of shape (num_layers, hidden_dim).
+    """
+
+    def __init__(
+        self,
+        embedding_dir: str,
+        layer_indices: List[int],
+        jsonl: str,
+    ):
+        self.embedding_dir = Path(embedding_dir)
+        self.layer_indices = layer_indices
+
+        with open(jsonl, "r") as f:
+            self.meta = [json.loads(line) for line in f]
+
+        self._key_to_label = {}
+        for info in self.meta:
+            key = f"{info['track_id']}||{info['segment_start']}"
+            self._key_to_label[key] = LABEL2IDX[normalize_label(info["label"])]
+
+        mapping_path = self.embedding_dir / "sample_to_audio_path.json"
+        with open(mapping_path, "r") as f:
+            data = json.load(f)
+        self._sample_to_key: List[str] = data["sample_to_audio_path"]
+
+        self._labels = [
+            self._key_to_label[key]
+            for key in self._sample_to_key
+        ]
+
+        # Load memmaps for all specified layers
+        self._memmaps = []
+        for l in layer_indices:
+            layer_dir = self.embedding_dir / f"layer{l}" / "sequence-level"
+            meta_path = layer_dir / "metadata.json"
+            with open(meta_path, "r") as f:
+                meta = json.load(f)
+            shape = tuple(meta["shape"])
+            dtype = np.dtype(meta["dtype"])
+            mm = np.memmap(
+                layer_dir / "embeddings.dat",
+                dtype=dtype,
+                mode="r",
+                shape=shape,
+            )
+            self._memmaps.append(mm)
+
+    def __len__(self) -> int:
+        return len(self._labels)
+
+    def __getitem__(self, idx: int):
+        embs = [torch.from_numpy(np.copy(mm[idx])).float() for mm in self._memmaps]
+        label = self._labels[idx]
+        key = self._sample_to_key[idx]
+        return torch.stack(embs, dim=0), label, key  # (L, H)

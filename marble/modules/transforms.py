@@ -1,5 +1,6 @@
 # marble/modules/transforms.py
 import hashlib
+import math
 import random
 import re
 from typing import TYPE_CHECKING, Sequence, Dict, Optional, Union, Tuple, List
@@ -465,6 +466,42 @@ class LayerWeightedSum(BaseEmbTransform):
         return rearrange(y, 'b 1 (t h) -> b 1 t h', h=x.size(-1))
 
 
+class SoftmaxWeightedSum(BaseEmbTransform):
+    """
+    ELMo / Zhou et al. (2025) softmax-normalized weighted sum over L layers.
+
+    output = gamma * sum_i( softmax(w)_i * layer_i )
+
+    Unlike LayerWeightedSum (Conv1d, unconstrained weights with bias),
+    this uses a learnable vector passed through softmax so weights are
+    positive and sum to 1.  A learnable scalar gamma allows rescaling.
+    """
+    def __init__(self, num_layers: int):
+        super().__init__()
+        self.weights = nn.Parameter(torch.zeros(num_layers))
+        self.gamma = nn.Parameter(torch.ones(1))
+
+    def forward(self, x: torch.Tensor, **kwargs) -> torch.Tensor:
+        if isinstance(x, tuple):
+            x = torch.stack(x, dim=1)
+        # x: (B, L, T, H)
+        w = F.softmax(self.weights, dim=0)          # (L,)
+        y = torch.einsum('l, b l t h -> b t h', w, x)  # (B, T, H)
+        y = self.gamma * y
+        return y.unsqueeze(1)                        # (B, 1, T, H)
+
+
+class LayerStack(BaseEmbTransform):
+    """
+    Concatenates selected layers along hidden dim.
+    (B, L, T, H) → (B, 1, T, L*H)
+    """
+    def forward(self, x: torch.Tensor, **kwargs) -> torch.Tensor:
+        if isinstance(x, tuple):
+            x = torch.stack(x, dim=1)
+        return rearrange(x, 'b l t h -> b 1 t (l h)')
+
+
 class MLPReduce(BaseEmbTransform):
     """
     Flattens layers & hidden dims and reduces via an MLP.
@@ -487,6 +524,72 @@ class MLPReduce(BaseEmbTransform):
         xt = rearrange(x, 'b l t h -> (b t) (l h)')
         y = self.fc(xt)
         return rearrange(y, '(b t) h -> b 1 t h', t=x.size(2))
+
+
+class HConv(BaseEmbTransform):
+    """
+    Hierarchical 1D convolution over the layer dimension (Shih & Harwath, 2024).
+    Applies floor(log_stride(L)) Conv1d layers with ReLU, progressively reducing
+    the layer dimension. Convolutions treat hidden_size as channels and slide
+    across layers.
+
+    Reference: "Interface Design for Self-Supervised Speech Models" (Interspeech 2024)
+    """
+    def __init__(self, num_layers: int, hidden_size: int,
+                 kernel_size: int = 5, stride: int = 3):
+        super().__init__()
+
+        L = num_layers
+        num_convs = math.floor(math.log(L) / math.log(stride))
+        if num_convs < 1:
+            raise ValueError(
+                f"num_layers={num_layers} too small for stride={stride}, "
+                f"need at least {stride + 1} layers"
+            )
+
+        convs = []
+        for i in range(num_convs):
+            padding = kernel_size // 2
+            L_out = (L + 2 * padding - kernel_size) // stride + 1
+
+            if i == num_convs - 1:
+                out_ch = hidden_size // L_out
+            else:
+                out_ch = hidden_size
+
+            convs.append(nn.Conv1d(hidden_size, out_ch, kernel_size, stride, padding))
+            convs.append(nn.ReLU())
+
+            L = L_out
+
+        self.transforms = nn.Sequential(*convs)
+        self._raw_output_dim = out_ch * L
+
+        if self._raw_output_dim != hidden_size:
+            self.proj = nn.Linear(self._raw_output_dim, hidden_size)
+        else:
+            self.proj = None
+
+    def forward(self, x: torch.Tensor, **kwargs) -> torch.Tensor:
+        """
+        Args:
+            x (Tensor): Layer-stacked tensor of shape
+                (batch_size, num_layers, seq_len, hidden_size).
+        Returns:
+            Tensor: Reduced representation of shape
+                (batch_size, 1, seq_len, hidden_size).
+        """
+        if isinstance(x, tuple):
+            x = torch.stack(x, dim=1)
+        b, l, t, h = x.shape
+        # (B, L, T, H) -> (B*T, H, L): conv over layer dimension
+        x = rearrange(x, 'b l t h -> (b t) h l')
+        x = self.transforms(x)
+        # (B*T, C', L') -> (B*T, C'*L')
+        x = x.reshape(b * t, -1)
+        if self.proj is not None:
+            x = self.proj(x)
+        return rearrange(x, '(b t) h -> b 1 t h', b=b, t=t)
 
 
 class TimeAdaptivePool(BaseEmbTransform):
@@ -657,6 +760,261 @@ class TimeQueryAttentionPool(BaseEmbTransform):
         x_cls = x_cls.transpose(1, 2).reshape(n, self.num_queries, self.in_dim)
         x_cls = x_cls.mean(dim=1)
         return rearrange(x_cls, '(b l) h -> b l 1 h', b=b, l=l)
+
+
+class TimeEfficientProbing(BaseEmbTransform):
+    """
+    Efficient Probing (Psomas et al., ICLR 2026).
+
+    Parameter-efficient multi-query cross-attention that eliminates the
+    key projection. M learnable queries q_j attend directly to the raw
+    input features (Eq. 10: â_j = X^T q_j), and a single value projection
+    W_V is split into M per-query slices so each query extracts a different
+    feature subspace.
+
+    Key differences from TimeQueryAttentionPool (≈ MHCA):
+      - No K projection (K = X, identity)
+      - Per-query V slicing (each query gets out_dim/M dimensions)
+      - Single-head attention (num_heads=1)
+
+    Output shape: (B, L, 1, in_dim // d_out).
+    With d_out=1 (default), output dim = in_dim (same as TimeAvgPool).
+    """
+    def __init__(
+        self,
+        in_dim: int,
+        num_queries: int = 32,
+        d_out: int = 1,
+    ):
+        super().__init__()
+        self.in_dim = in_dim
+        self.num_queries = num_queries
+        self.d_out = d_out
+        self.out_dim = in_dim // d_out
+        self.scale = in_dim ** -0.5
+
+        if self.out_dim % num_queries != 0:
+            raise ValueError(
+                f"out_dim ({self.out_dim} = in_dim//d_out = {in_dim}//{d_out}) "
+                f"must be divisible by num_queries ({num_queries})"
+            )
+
+        # M learnable queries in the input feature space — no Q or K projection
+        self.cls_token = nn.Parameter(torch.randn(1, num_queries, in_dim) * 0.02)
+        # Only W_V is learned; split into M per-query slices in forward()
+        self.v = nn.Linear(in_dim, self.out_dim, bias=False)
+
+    def forward(self, x: torch.Tensor, **kwargs) -> torch.Tensor:
+        b, l, t, h = x.shape
+        flat = rearrange(x, 'b l t h -> (b l) t h')
+        n = flat.shape[0]
+        out_dim = self.out_dim
+        m = self.num_queries
+
+        cls_token = self.cls_token.expand(n, -1, -1)  # (N, M, H)
+
+        # Attention logits: â_j = (q_j * scale)^T x  — no K projection
+        attn = torch.bmm(cls_token * self.scale, flat.transpose(1, 2))  # (N, M, T)
+        attn = attn.softmax(dim=-1)
+
+        # Per-query V slicing: W_V x reshaped so each query gets out_dim/M dims
+        v = self.v(flat)  # (N, T, out_dim)
+        v = v.reshape(n, t, m, out_dim // m).permute(0, 2, 1, 3)  # (N, M, T, d)
+
+        # Weighted aggregation
+        out = torch.matmul(attn.unsqueeze(2), v)  # (N, M, 1, d)
+        out = out.reshape(n, out_dim)  # (N, out_dim) — concatenated query outputs
+
+        return rearrange(out, '(b l) h -> b l 1 h', b=b, l=l)
+
+
+class LayerCrossAttention(BaseEmbTransform):
+    """
+    Attentive Multi-Layer Fusion (Ciernik et al., 2026).
+
+    A learnable query token attends to temporally-pooled layer
+    representations via multi-head cross-attention, learning task-adaptive
+    layer weighting.
+
+    The original paper uses both CLS and AP (avg-pooled) tokens per layer
+    (2|L| tokens). Since audio models lack CLS tokens, we use only the
+    temporally-pooled representation per layer (|L| tokens).
+
+    Supports both sequence-level and frame-level input:
+    - Sequence-level: (B, L, 1, H) → (B, 1, 1, H)
+    - Frame-level:    (B, L, T, H) → (B, 1, T, H)  (attention applied per frame)
+
+    Note: uses doubled head dimension (head_dim = 2 * dim // num_heads)
+    following Ciernik's ablation study; separate LayerNorm on Q, K, V
+    following their AttentiveBlock design.
+    """
+    def __init__(
+        self,
+        hidden_dim: int,
+        num_heads: int = 8,
+        double_head_dim: bool = True,
+        attn_drop: float = 0.0,
+        proj_drop: float = 0.0,
+        use_batchnorm: bool = True,
+        input_noise_std: float = 0.0,
+        input_noise_prob: float = 0.0,
+        l2_normalize: bool = False,
+    ):
+        super().__init__()
+        self.hidden_dim = hidden_dim
+        self.num_heads = num_heads
+        self.input_noise_std = input_noise_std
+        self.input_noise_prob = input_noise_prob
+        self.l2_normalize = l2_normalize
+
+        head_dim = (hidden_dim // num_heads) * (2 if double_head_dim else 1)
+        all_head_dim = head_dim * num_heads
+        self.head_dim = head_dim
+        self.scale = head_dim ** -0.5
+
+        # Separate LayerNorm for Q, K, V (AttentiveBlock design)
+        self.norm_q = nn.LayerNorm(hidden_dim)
+        self.norm_k = nn.LayerNorm(hidden_dim)
+        self.norm_v = nn.LayerNorm(hidden_dim)
+
+        # Full Q/K/V projections
+        self.q_proj = nn.Linear(hidden_dim, all_head_dim, bias=False)
+        self.k_proj = nn.Linear(hidden_dim, all_head_dim, bias=False)
+        self.v_proj = nn.Linear(hidden_dim, all_head_dim, bias=False)
+        self.out_proj = nn.Linear(all_head_dim, hidden_dim)
+
+        self.attn_drop = nn.Dropout(attn_drop)
+        self.proj_drop = nn.Dropout(proj_drop)
+
+        # BatchNorm on attention output (Ciernik's AttentiveProbeModel, affine=True from their ablation)
+        self.bn = (
+            nn.BatchNorm1d(hidden_dim, eps=1e-05, momentum=0.1, affine=True)
+            if use_batchnorm
+            else nn.Identity()
+        )
+
+        # Learnable query token
+        self.query_token = nn.Parameter(torch.zeros(1, 1, hidden_dim))
+        nn.init.normal_(self.query_token, std=0.02)
+
+    def forward(self, x: torch.Tensor, **kwargs) -> torch.Tensor:
+        b, num_layers, t, h = x.shape
+        frame_level = t > 1
+
+        if frame_level:
+            # Frame-level (beat tracking): (B, L, T, H) → (B*T, L, H)
+            # Apply cross-attention independently per frame
+            x_layers = x.permute(0, 2, 1, 3).reshape(b * t, num_layers, h)
+        else:
+            # Sequence-level: (B, L, 1, H) → (B, L, H)
+            x_layers = x.squeeze(2)
+
+        n = x_layers.shape[0]  # B or B*T
+
+        # L2 normalize input features (Ciernik Appendix A.1)
+        if self.l2_normalize:
+            x_layers = torch.nn.functional.normalize(x_layers, p=2, dim=-1)
+
+        # Gaussian noise on input (Ciernik: N(0, 0.05) with p=0.5, training only)
+        if self.training and self.input_noise_std > 0 and self.input_noise_prob > 0:
+            if torch.rand(1).item() < self.input_noise_prob:
+                x_layers = x_layers + torch.randn_like(x_layers) * self.input_noise_std
+
+        query = self.query_token.expand(n, -1, -1)  # (N, 1, H)
+
+        # LayerNorm (Ciernik: norm_q(q+pos) with pos=0, norm_k(kv+pos), norm_v(kv))
+        q = self.norm_q(query)
+        k = self.norm_k(x_layers)
+        v = self.norm_v(x_layers)
+
+        # Project Q/K/V
+        q = self.q_proj(q).reshape(n, 1, self.num_heads, self.head_dim).permute(0, 2, 1, 3)
+        k = self.k_proj(k).reshape(n, num_layers, self.num_heads, self.head_dim).permute(0, 2, 1, 3)
+        v = self.v_proj(v).reshape(n, num_layers, self.num_heads, self.head_dim).permute(0, 2, 1, 3)
+
+        # Scaled dot-product attention over layers
+        attn = (q * self.scale) @ k.transpose(-2, -1)  # (N, heads, 1, L)
+        attn = attn.softmax(dim=-1)
+        attn = self.attn_drop(attn)
+
+        out = (attn @ v).transpose(1, 2).reshape(n, 1, -1)  # (N, 1, all_head_dim)
+        out = self.out_proj(out)  # (N, 1, H)
+        out = self.proj_drop(out)
+
+        # BatchNorm on attention output (Ciernik: bn(query_tokens[:, 0, :]))
+        out = self.bn(out[:, 0, :]).unsqueeze(1)  # (N, H) → BN → (N, 1, H)
+
+        if frame_level:
+            # Reshape back: (B*T, 1, H) → (B, 1, T, H)
+            out = out.reshape(b, t, h).unsqueeze(1)
+        else:
+            out = out.unsqueeze(2)  # (B, 1, 1, H)
+
+        return out
+
+
+class TimeStridedPool(BaseEmbTransform):
+    """
+    Pools only every n-th frame (default: even frames), then averages.
+    Avoids zigzag cancellation by skipping alternating frames.
+    Output shape: (B, L, 1, H) — same as TimeAvgPool.
+    """
+    def __init__(self, stride: int = 2):
+        super().__init__()
+        self.stride = stride
+
+    def forward(self, x: torch.Tensor, **kwargs) -> torch.Tensor:
+        return reduce(x[:, :, ::self.stride, :], 'b l t h -> b l 1 h', 'mean')
+
+
+class TimeVelocityPool(BaseEmbTransform):
+    """
+    Pools velocity vectors (frame-to-frame differences) instead of raw frames.
+    Captures directional patterns that mean pooling of raw frames destroys.
+    Output shape: (B, L, 1, H) — same as TimeAvgPool.
+    """
+    def forward(self, x: torch.Tensor, **kwargs) -> torch.Tensor:
+        velocities = x[:, :, 1:, :] - x[:, :, :-1, :]
+        return reduce(velocities, 'b l t h -> b l 1 h', 'mean')
+
+
+class TimeEvenOddConcatPool(BaseEmbTransform):
+    """
+    Averages even and odd frames separately, concatenates along hidden dim.
+    Captures both DC (mean trajectory) and AC (oscillation phase).
+    Output shape: (B, L, 1, 2*H) — decoder in_dim must be doubled.
+    """
+    def forward(self, x: torch.Tensor, **kwargs) -> torch.Tensor:
+        even_mean = reduce(x[:, :, ::2, :], 'b l t h -> b l 1 h', 'mean')
+        odd_mean = reduce(x[:, :, 1::2, :], 'b l t h -> b l 1 h', 'mean')
+        return torch.cat([even_mean, odd_mean], dim=-1)
+
+
+class TimeRectifiedPool(BaseEmbTransform):
+    """
+    Demodulates the zigzag: subtracts running mean, takes abs, then pools.
+    Like AM demodulation — recovers the oscillation envelope.
+    Output shape: (B, L, 1, H) — same as TimeAvgPool.
+    """
+    def __init__(self, window: int = 5):
+        super().__init__()
+        self.window = window
+
+    def forward(self, x: torch.Tensor, **kwargs) -> torch.Tensor:
+        b, l, t, h = x.shape
+        # Running mean via avg_pool1d
+        flat = rearrange(x, 'b l t h -> (b l) h t')
+        pad = self.window // 2
+        running_mean = F.avg_pool1d(
+            F.pad(flat, (pad, pad), mode='replicate'),
+            kernel_size=self.window, stride=1
+        )
+        # Truncate to match original length (avg_pool1d output may differ by 1)
+        running_mean = running_mean[:, :, :t]
+        residual = flat[:, :, :t] - running_mean
+        rectified = residual.abs()
+        rectified = rearrange(rectified, '(b l) h t -> b l t h', b=b, l=l)
+        return reduce(rectified, 'b l t h -> b l 1 h', 'mean')
 
 
 class TimeLastNConcat(BaseEmbTransform):

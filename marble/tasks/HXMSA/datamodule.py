@@ -12,7 +12,8 @@ import lightning.pytorch as pl
 
 from marble.core.base_datamodule import BaseDataModule
 from marble.tasks.HXMSA.embedding_dataset import (
-    HXMSAEmbeddingDataset, LABEL2IDX, IDX2LABEL, normalize_label,
+    HXMSAEmbeddingDataset, HXMSAMultiLayerEmbeddingDataset,
+    LABEL2IDX, IDX2LABEL, normalize_label,
 )
 
 
@@ -208,6 +209,80 @@ class HXMSAEmbeddingDataModule(pl.LightningDataModule):
             self.test_dataset = HXMSAEmbeddingDataset(
                 self.embedding_root / "test",
                 self.layer_idx,
+                self.test_jsonl,
+            )
+
+    def train_dataloader(self):
+        return DataLoader(
+            self.train_dataset,
+            batch_size=self.batch_size,
+            shuffle=True,
+            num_workers=self.num_workers,
+            pin_memory=True,
+            prefetch_factor=2,
+        )
+
+    def val_dataloader(self):
+        return DataLoader(
+            self.val_dataset,
+            batch_size=self.batch_size,
+            shuffle=False,
+            num_workers=self.num_workers,
+            pin_memory=True,
+            prefetch_factor=2,
+        )
+
+    def test_dataloader(self):
+        return DataLoader(
+            self.test_dataset,
+            batch_size=self.batch_size,
+            shuffle=False,
+            num_workers=self.num_workers,
+            pin_memory=True,
+            prefetch_factor=2,
+        )
+
+
+class HXMSAMultiLayerEmbeddingDataModule(pl.LightningDataModule):
+    """DataModule for probing on pre-extracted HXMSA embeddings with MULTIPLE layers.
+    Returns batches of shape (B, L, H) instead of (B, H).
+    """
+
+    def __init__(
+        self,
+        embedding_root: str,
+        layer_indices: list,
+        train_jsonl: str,
+        val_jsonl: str,
+        test_jsonl: str,
+        batch_size: int = 16,
+        num_workers: int = 4,
+    ):
+        super().__init__()
+        self.embedding_root = Path(embedding_root)
+        self.layer_indices = layer_indices
+        self.train_jsonl = train_jsonl
+        self.val_jsonl = val_jsonl
+        self.test_jsonl = test_jsonl
+        self.batch_size = batch_size
+        self.num_workers = num_workers
+
+    def setup(self, stage: str | None = None):
+        if stage in (None, "fit"):
+            self.train_dataset = HXMSAMultiLayerEmbeddingDataset(
+                self.embedding_root / "train",
+                self.layer_indices,
+                self.train_jsonl,
+            )
+            self.val_dataset = HXMSAMultiLayerEmbeddingDataset(
+                self.embedding_root / "val",
+                self.layer_indices,
+                self.val_jsonl,
+            )
+        if stage in (None, "test", "predict"):
+            self.test_dataset = HXMSAMultiLayerEmbeddingDataset(
+                self.embedding_root / "test",
+                self.layer_indices,
                 self.test_jsonl,
             )
 

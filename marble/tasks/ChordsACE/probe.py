@@ -6,6 +6,7 @@ and mir_eval evaluation at test time.
 
 import logging
 import warnings
+from typing import List, Optional
 
 import mir_eval
 import numpy as np
@@ -15,6 +16,7 @@ import torch.nn.functional as F
 import lightning.pytorch as pl
 from einops import reduce
 
+from marble.core.utils import instantiate_from_config
 from marble.tasks.ChordsACE.embedding_dataset import (
     NUM_ROOT_CLASSES,
     NUM_BASS_CLASSES,
@@ -225,13 +227,21 @@ class DecomposedChordProbe(pl.LightningModule):
         time_dim_mismatch_tol: int = 5,
         clip_seconds: float = 15.0,
         label_freq: int = 25,
+        emb_transforms: Optional[List[dict]] = None,
     ):
         super().__init__()
-        self.save_hyperparameters()
+        self.save_hyperparameters(ignore=["emb_transforms"])
         self.lr = lr
         self.clip_seconds = clip_seconds
         self.label_freq = label_freq
         self.tol = time_dim_mismatch_tol
+
+        # Optional pre-decoder transforms over the layer dim (e.g. HConv,
+        # SoftmaxWeightedSum, LayerCrossAttention). They consume (B, L, T, H)
+        # and typically emit (B, 1, T, H); the mean-pool below then no-ops.
+        self.emb_transforms = nn.ModuleList(
+            [instantiate_from_config(t) for t in (emb_transforms or [])]
+        )
 
         # Shared backbone
         self.shared = nn.Sequential(
@@ -264,7 +274,9 @@ class DecomposedChordProbe(pl.LightningModule):
         """
         if x.dim() == 3:  # (B, T, H)
             x = x.unsqueeze(1)  # → (B, 1, T, H)
-        # Pool over layers
+        for t in self.emb_transforms:
+            x = t(x)
+        # Pool over layers (no-op if a transform already collapsed L → 1)
         x = reduce(x, "b l t h -> b t h", "mean")
         h = self.shared(x)
         return self.root_head(h), self.bass_head(h), self.tones_head(h)

@@ -39,7 +39,11 @@ class MLPDecoderKeepTime(BaseDecoder):
 
         # Build a sequence of Linear → Activation → Dropout layers
         for hidden_dim in hidden_layers:
-            layers.append(nn.Linear(prev_dim, hidden_dim))
+            # in_dim == -1 → use LazyLinear for auto-detection (first layer only)
+            if prev_dim == -1:
+                layers.append(nn.LazyLinear(hidden_dim))
+            else:
+                layers.append(nn.Linear(prev_dim, hidden_dim))
             if activation_fn is not None:
                 act = instantiate_from_config(activation_fn)
                 layers.append(act)
@@ -95,10 +99,14 @@ class MLPDecoder(BaseDecoder):
         prev_dim = in_dim
 
         for hidden_dim in hidden_layers:
-            layers.append(nn.Linear(prev_dim, hidden_dim))
+            # in_dim == -1 → use LazyLinear for auto-detection (first layer only)
+            if prev_dim == -1:
+                layers.append(nn.LazyLinear(hidden_dim))
+            else:
+                layers.append(nn.Linear(prev_dim, hidden_dim))
             if activation_fn is not None:
-                activation_fn = instantiate_from_config(activation_fn)
-                layers.append(activation_fn)
+                act = instantiate_from_config(activation_fn)
+                layers.append(act)
             if dropout > 0.0:
                 layers.append(nn.Dropout(dropout))
             prev_dim = hidden_dim

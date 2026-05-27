@@ -14,7 +14,10 @@ import lightning.pytorch as pl
 from marble.core.base_datamodule import BaseDataModule
 from marble.utils.utils import widen_temporal_events
 from marble.utils.utils import times_to_mask, mask_to_times
-from marble.tasks.GTZANBeatTracking.embedding_dataset import GTZANBeatTrackingEmbeddingDataset
+from marble.tasks.GTZANBeatTracking.embedding_dataset import (
+    GTZANBeatTrackingEmbeddingDataset,
+    GTZANBeatTrackingMultiLayerEmbeddingDataset,
+)
 
 
 class _GTZANBeatTrackingAudioBase(Dataset):
@@ -345,6 +348,110 @@ class GTZANBeatTrackingEmbeddingDataModule(pl.LightningDataModule):
             self.test_dataset = GTZANBeatTrackingEmbeddingDataset(
                 embedding_dir=self.embedding_root / "test",
                 layer_idx=self.layer_idx,
+                jsonl=self.test_jsonl,
+                clip_seconds=self.clip_seconds,
+                label_freq=self.label_freq,
+                num_neighbors=self.eval_num_neighbors,
+                use_local_bpm=self.use_local_bpm,
+                min_clip_ratio=self.min_clip_ratio,
+            )
+
+    def train_dataloader(self):
+        return DataLoader(
+            self.train_dataset,
+            batch_size=self.batch_size,
+            shuffle=True,
+            num_workers=self.num_workers,
+            pin_memory=True,
+            prefetch_factor=2,
+        )
+
+    def val_dataloader(self):
+        return DataLoader(
+            self.val_dataset,
+            batch_size=self.batch_size,
+            shuffle=False,
+            num_workers=self.num_workers,
+            pin_memory=True,
+            prefetch_factor=2,
+        )
+
+    def test_dataloader(self):
+        return DataLoader(
+            self.test_dataset,
+            batch_size=self.batch_size,
+            shuffle=False,
+            num_workers=self.num_workers,
+            pin_memory=True,
+            prefetch_factor=2,
+        )
+
+
+class GTZANBeatTrackingMultiLayerEmbeddingDataModule(pl.LightningDataModule):
+    """
+    DataModule for probing on pre-extracted GTZAN beat-tracking embeddings
+    with MULTIPLE layers. Returns batches of shape (B, L, T, H).
+    """
+
+    def __init__(
+        self,
+        embedding_root: str,
+        layer_indices: list,
+        train_jsonl: str,
+        val_jsonl: str,
+        test_jsonl: str,
+        clip_seconds: float,
+        label_freq: int,
+        batch_size: int = 8,
+        num_workers: int = 8,
+        min_clip_ratio: float = 0.8,
+        use_local_bpm: bool = True,
+        train_num_neighbors: int = 2,
+        eval_num_neighbors: int = 0,
+    ):
+        super().__init__()
+        from pathlib import Path
+
+        self.embedding_root = Path(embedding_root)
+        self.layer_indices = layer_indices
+        self.train_jsonl = train_jsonl
+        self.val_jsonl = val_jsonl
+        self.test_jsonl = test_jsonl
+        self.clip_seconds = clip_seconds
+        self.label_freq = label_freq
+        self.batch_size = batch_size
+        self.num_workers = num_workers
+        self.min_clip_ratio = min_clip_ratio
+        self.use_local_bpm = use_local_bpm
+        self.train_num_neighbors = train_num_neighbors
+        self.eval_num_neighbors = eval_num_neighbors
+
+    def setup(self, stage: str | None = None):
+        if stage in (None, "fit"):
+            self.train_dataset = GTZANBeatTrackingMultiLayerEmbeddingDataset(
+                embedding_dir=self.embedding_root / "train",
+                layer_indices=self.layer_indices,
+                jsonl=self.train_jsonl,
+                clip_seconds=self.clip_seconds,
+                label_freq=self.label_freq,
+                num_neighbors=self.train_num_neighbors,
+                use_local_bpm=self.use_local_bpm,
+                min_clip_ratio=self.min_clip_ratio,
+            )
+            self.val_dataset = GTZANBeatTrackingMultiLayerEmbeddingDataset(
+                embedding_dir=self.embedding_root / "val",
+                layer_indices=self.layer_indices,
+                jsonl=self.val_jsonl,
+                clip_seconds=self.clip_seconds,
+                label_freq=self.label_freq,
+                num_neighbors=self.eval_num_neighbors,
+                use_local_bpm=self.use_local_bpm,
+                min_clip_ratio=self.min_clip_ratio,
+            )
+        if stage in (None, "test", "predict"):
+            self.test_dataset = GTZANBeatTrackingMultiLayerEmbeddingDataset(
+                embedding_dir=self.embedding_root / "test",
+                layer_indices=self.layer_indices,
                 jsonl=self.test_jsonl,
                 clip_seconds=self.clip_seconds,
                 label_freq=self.label_freq,
